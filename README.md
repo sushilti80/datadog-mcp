@@ -134,8 +134,9 @@ Add to your Claude Desktop MCP configuration:
       "command": "python",
       "args": ["/Users/Sushil.Tiwari/Downloads/datadog-mcp2/src/datadog_mcp_server.py"],
       "env": {
-        "DATADOG_API_KEY": "your_api_key",
-        "DATADOG_APP_KEY": "your_app_key"
+        "DATADOG_API_KEY": "######",
+        "DATADOG_APP_KEY": "#####",
+        "DATADOG_SITE": "#####3"
       }
     }
   }
