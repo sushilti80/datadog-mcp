@@ -13,7 +13,15 @@ if [ ! -f "src/datadog_mcp_server.py" ]; then
     exit 1
 fi
 
-# Install test dependencies if not already installed
+# Create and activate virtual environment
+if [ ! -d "venv" ]; then
+    echo "🐍 Creating virtual environment..."
+    python3 -m venv venv
+fi
+
+source venv/bin/activate
+
+# Install test dependencies
 echo "📦 Installing test dependencies..."
 pip install pytest pytest-asyncio pytest-cov black flake8 > /dev/null 2>&1
 
