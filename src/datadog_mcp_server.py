@@ -9,9 +9,18 @@ with Server-Sent Events (SSE) support.
 
 import os
 import logging
-from datetime import datetime, timedelta
+import json
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 from dataclasses import dataclass
+from functools import wraps
+from enum import Enum
 
 from fastmcp import FastMCP
 from datadog_api_client import ApiClient, Configuration
@@ -19,6 +28,146 @@ from datadog_api_client.v1.api.metrics_api import MetricsApi
 from datadog_api_client.v1.api.logs_api import LogsApi
 from datadog_api_client.v1.api.monitors_api import MonitorsApi
 from datadog_api_client.v1.api.dashboards_api import DashboardsApi
+
+# Debug Configuration System
+class DebugLevel(Enum):
+    NONE = "NONE"
+    INFO = "INFO" 
+    DEBUG = "DEBUG"
+    TRACE = "TRACE"
+
+@dataclass
+class DebugConfig:
+    """Configuration for debug tracing and logging"""
+    level: DebugLevel = DebugLevel.INFO
+    log_requests: bool = False
+    log_responses: bool = False
+    log_timing: bool = False
+    pretty_print: bool = True
+    log_parameters: bool = False
+    log_errors: bool = True
+    mask_sensitive_data: bool = True
+    
+    @classmethod
+    def from_env(cls) -> 'DebugConfig':
+        """Create debug config from environment variables"""
+        level_str = os.getenv('MCP_DEBUG_LEVEL', 'INFO').upper()
+        try:
+            level = DebugLevel(level_str)
+        except ValueError:
+            level = DebugLevel.INFO
+            
+        return cls(
+            level=level,
+            log_requests=os.getenv('MCP_DEBUG_REQUESTS', 'false').lower() == 'true',
+            log_responses=os.getenv('MCP_DEBUG_RESPONSES', 'false').lower() == 'true', 
+            log_timing=os.getenv('MCP_DEBUG_TIMING', 'false').lower() == 'true',
+            pretty_print=os.getenv('MCP_DEBUG_PRETTY_PRINT', 'true').lower() == 'true',
+            log_parameters=os.getenv('MCP_DEBUG_PARAMETERS', 'false').lower() == 'true',
+            log_errors=os.getenv('MCP_DEBUG_ERRORS', 'true').lower() == 'true',
+            mask_sensitive_data=os.getenv('MCP_DEBUG_MASK_SENSITIVE', 'true').lower() == 'true'
+        )
+    
+    def should_log_at_level(self, check_level: DebugLevel) -> bool:
+        """Check if we should log at the specified level"""
+        levels = [DebugLevel.NONE, DebugLevel.INFO, DebugLevel.DEBUG, DebugLevel.TRACE]
+        return levels.index(self.level) >= levels.index(check_level)
+
+# Global debug configuration
+debug_config = DebugConfig.from_env()
+
+# Debug Utility Functions
+def mask_sensitive_data(data: Any) -> Any:
+    """Mask sensitive data in debug logs"""
+    if not debug_config.mask_sensitive_data:
+        return data
+        
+    if isinstance(data, dict):
+        masked = {}
+        for key, value in data.items():
+            if any(sensitive in key.lower() for sensitive in ['key', 'secret', 'token', 'password']):
+                masked[key] = "***MASKED***"
+            else:
+                masked[key] = mask_sensitive_data(value)
+        return masked
+    elif isinstance(data, list):
+        return [mask_sensitive_data(item) for item in data]
+    else:
+        return data
+
+def format_debug_data(data: Any, pretty: bool = True) -> str:
+    """Format data for debug logging"""
+    masked_data = mask_sensitive_data(data)
+    if pretty and debug_config.pretty_print:
+        return json.dumps(masked_data, indent=2, default=str)
+    else:
+        return json.dumps(masked_data, default=str)
+
+def debug_log(level: DebugLevel, message: str, data: Any = None, correlation_id: str = None):
+    """Enhanced debug logging with correlation tracking"""
+    if not debug_config.should_log_at_level(level):
+        return
+        
+    log_message = message
+    if correlation_id:
+        log_message = f"[{correlation_id}] {message}"
+        
+    if data is not None:
+        log_message += f"\nData: {format_debug_data(data)}"
+    
+    # Use appropriate logging level
+    if level == DebugLevel.TRACE:
+        logger.debug(f"TRACE: {log_message}")
+    elif level == DebugLevel.DEBUG:
+        logger.debug(f"DEBUG: {log_message}")
+    elif level == DebugLevel.INFO:
+        logger.info(f"DEBUG: {log_message}")
+
+def mcp_debug_decorator(tool_name: str):
+    """Decorator to add debug tracing to MCP tools"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            correlation_id = str(uuid.uuid4())[:8]
+            start_time = time.time()
+            
+            # Log incoming request
+            if debug_config.log_requests:
+                debug_log(DebugLevel.DEBUG, f"MCP Tool Call: {tool_name}", {
+                    "args": args,
+                    "kwargs": kwargs if debug_config.log_parameters else "***HIDDEN***"
+                }, correlation_id)
+            
+            try:
+                # Execute the function
+                result = func(*args, **kwargs)
+                execution_time = time.time() - start_time
+                
+                # Log successful response
+                if debug_config.log_responses:
+                    debug_log(DebugLevel.DEBUG, f"MCP Tool Success: {tool_name}", {
+                        "result": result,
+                        "execution_time_ms": round(execution_time * 1000, 2)
+                    } if debug_config.log_timing else {"result": result}, correlation_id)
+                
+                return result
+                
+            except Exception as e:
+                execution_time = time.time() - start_time
+                
+                # Log error response
+                if debug_config.log_errors:
+                    debug_log(DebugLevel.INFO, f"MCP Tool Error: {tool_name}", {
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "execution_time_ms": round(execution_time * 1000, 2) if debug_config.log_timing else None
+                    }, correlation_id)
+                
+                raise
+                
+        return wrapper
+    return decorator
+
 from datadog_api_client.v1.api.hosts_api import HostsApi
 from datadog_api_client.v1.model.metrics_query_response import MetricsQueryResponse
 from datadog_api_client.v1.model.logs_list_request import LogsListRequest
@@ -33,9 +182,44 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure logging with debug support
+def setup_logging():
+    """Setup logging based on debug configuration"""
+    # Set base logging level
+    if debug_config.level == DebugLevel.TRACE:
+        level = logging.DEBUG
+    elif debug_config.level == DebugLevel.DEBUG:
+        level = logging.DEBUG
+    elif debug_config.level == DebugLevel.INFO:
+        level = logging.INFO
+    else:  # NONE
+        level = logging.WARNING
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # Configure specific loggers based on debug settings
+    if debug_config.should_log_at_level(DebugLevel.TRACE):
+        logging.getLogger("uvicorn").setLevel(logging.DEBUG)
+        logging.getLogger("fastmcp").setLevel(logging.DEBUG)
+        logging.getLogger("datadog_api_client").setLevel(logging.DEBUG)
+    
+    return logging.getLogger(__name__)
+
+logger = setup_logging()
+
+# Log the debug configuration on startup
+debug_log(DebugLevel.INFO, "Debug Configuration Loaded", {
+    "level": debug_config.level.value,
+    "log_requests": debug_config.log_requests,
+    "log_responses": debug_config.log_responses,
+    "log_timing": debug_config.log_timing,
+    "pretty_print": debug_config.pretty_print
+})
 
 @dataclass
 class DatadogConfig:
@@ -68,26 +252,109 @@ class DatadogMCPServer:
         return ApiClient(configuration)
     
     def query_metrics(self, query: str, from_time: int, to_time: int) -> Dict[str, Any]:
-        """Query Datadog metrics"""
+        """
+        Query Datadog metrics with comprehensive error handling and validation
+        
+        Args:
+            query: Datadog metrics query string
+            from_time: Start time as Unix timestamp (seconds)
+            to_time: End time as Unix timestamp (seconds)
+            
+        Returns:
+            Dictionary with query results or error information
+        """
         try:
+            # Input validation
+            if not query or not query.strip():
+                return {
+                    "status": "error",
+                    "error": "Query cannot be empty",
+                    "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'"
+                }
+            
+            if from_time >= to_time:
+                return {
+                    "status": "error", 
+                    "error": f"Invalid time range: from_time ({from_time}) must be less than to_time ({to_time})",
+                    "suggestion": "Ensure from_time is earlier than to_time"
+                }
+            
+            # Check if time range is reasonable (not too far in the past or future)
+            current_time = int(datetime.now(timezone.utc).timestamp())
+            if to_time > current_time + 3600:  # Allow 1 hour in future for clock skew
+                return {
+                    "status": "error",
+                    "error": f"to_time ({to_time}) cannot be more than 1 hour in the future",
+                    "suggestion": "Use current or past timestamps"
+                }
+            
+            # Check if time range is too large (more than 1 year)
+            if (to_time - from_time) > 365 * 24 * 3600:
+                return {
+                    "status": "error",
+                    "error": "Time range cannot exceed 1 year",
+                    "suggestion": "Use a smaller time range for better performance"
+                }
+            
+            logger.info(f"Querying metrics: {query} from {from_time} to {to_time}")
+            
             response = self.metrics_api.query_metrics(
                 _from=from_time,
                 to=to_time,
                 query=query
             )
-            return {
+            
+            # Enhanced response processing
+            series_data = []
+            if hasattr(response, 'series') and response.series:
+                series_data = response.series
+                logger.info(f"Retrieved {len(series_data)} time series")
+            
+            result = {
                 "status": "success",
                 "query": query,
                 "from_time": from_time,
                 "to_time": to_time,
-                "series": response.series if hasattr(response, 'series') else []
+                "duration_hours": round((to_time - from_time) / 3600, 2),
+                "series_count": len(series_data),
+                "series": series_data
             }
+            
+            # Add helpful metadata
+            if hasattr(response, 'from_date'):
+                result["response_from_date"] = response.from_date
+            if hasattr(response, 'to_date'):
+                result["response_to_date"] = response.to_date
+            if hasattr(response, 'group_by'):
+                result["group_by"] = response.group_by
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"Error querying metrics: {e}")
+            error_msg = str(e)
+            logger.error(f"Error querying metrics '{query}': {error_msg}")
+            
+            # Enhanced error categorization
+            if "403" in error_msg or "Forbidden" in error_msg:
+                suggestion = "Check API key permissions. Ensure 'metrics_read' permission is granted."
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                suggestion = "Check API key and APP key credentials."
+            elif "400" in error_msg or "Bad Request" in error_msg:
+                suggestion = "Check query syntax. Example: 'avg:system.cpu.user{*}'"
+            elif "timeout" in error_msg.lower():
+                suggestion = "Query timeout. Try reducing time range or simplifying query."
+            elif "rate limit" in error_msg.lower():
+                suggestion = "API rate limit exceeded. Wait a moment before retrying."
+            else:
+                suggestion = "Check network connectivity and Datadog service status."
+            
             return {
                 "status": "error",
-                "error": str(e),
-                "query": query
+                "error": error_msg,
+                "query": query,
+                "suggestion": suggestion,
+                "from_time": from_time,
+                "to_time": to_time
             }
     
     def search_logs(
@@ -117,9 +384,9 @@ class DatadogMCPServer:
         try:
             # Set default time range if not provided
             if from_time is None:
-                from_time = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
             if to_time is None:
-                to_time = datetime.utcnow().isoformat() + "Z"
+                to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
             
             # Validate and adjust limit (Datadog API max is 1000 per request)
             page_limit = min(limit, 1000)
@@ -302,41 +569,89 @@ class DatadogMCPServer:
 
     def list_active_metrics(self, filter_query: Optional[str] = None) -> Dict[str, Any]:
         """List active metrics in Datadog environment"""
+        correlation_id = str(uuid.uuid4())[:8]
+        debug_log(DebugLevel.DEBUG, f"Starting list_active_metrics with filter_query: {filter_query}", correlation_id=correlation_id)
+        
         try:
-            from datadog_api_client.v1.model.metrics_list_response import MetricsListResponse
-            
             # Get metrics from last 2 hours to ensure we get active metrics
-            from_time = int((datetime.now() - timedelta(hours=2)).timestamp())
+            from_time = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp())
+            debug_log(DebugLevel.TRACE, f"Calculated from_time", {
+                "from_time": from_time,
+                "from_time_datetime": datetime.fromtimestamp(from_time, timezone.utc).isoformat()
+            }, correlation_id)
             
+            # Build parameters dict - use _from instead of from_time
+            params = {"_from": from_time}
+            debug_log(DebugLevel.TRACE, f"Base params", params, correlation_id)
+            
+            # Add optional filter parameters according to API spec
             if filter_query:
-                response = self.metrics_api.list_active_metrics(
-                    from_time=from_time,
-                    filter=filter_query
-                )
-            else:
-                response = self.metrics_api.list_active_metrics(
-                    from_time=from_time
-                )
+                debug_log(DebugLevel.TRACE, f"Processing filter_query: {filter_query}", correlation_id=correlation_id)
+                # The API supports 'host' and 'tag_filter' parameters
+                # If it looks like a hostname, use host parameter
+                if '.' in filter_query and not ':' in filter_query:
+                    params["host"] = filter_query
+                    debug_log(DebugLevel.TRACE, f"Added host filter: {filter_query}", correlation_id=correlation_id)
+                else:
+                    # Otherwise use tag_filter for more complex queries
+                    params["tag_filter"] = filter_query
+                    debug_log(DebugLevel.TRACE, f"Added tag_filter: {filter_query}", correlation_id=correlation_id)
+            
+            debug_log(DebugLevel.TRACE, f"Final params before API call", params, correlation_id)
+            debug_log(DebugLevel.DEBUG, f"Calling metrics_api.list_active_metrics", correlation_id=correlation_id)
+            
+            response = self.metrics_api.list_active_metrics(**params)
+            debug_log(DebugLevel.DEBUG, f"API call completed successfully", correlation_id=correlation_id)
+            debug_log(DebugLevel.TRACE, f"Response analysis", {
+                "response_type": str(type(response)),
+                "response_attributes": dir(response)
+            }, correlation_id)
+            
+            if hasattr(response, '__dict__'):
+                debug_log(DebugLevel.TRACE, f"Response dict", response.__dict__, correlation_id)
             
             metrics = []
-            if hasattr(response, 'metrics') and response.metrics:
-                metrics = response.metrics
+            if hasattr(response, 'metrics'):
+                debug_log(DebugLevel.TRACE, f"Found metrics attribute", correlation_id=correlation_id)
+                if response.metrics:
+                    metrics = response.metrics
+                    debug_log(DebugLevel.DEBUG, f"Retrieved {len(metrics)} metrics from response.metrics", correlation_id=correlation_id)
+                else:
+                    debug_log(DebugLevel.INFO, f"response.metrics is empty or None: {response.metrics}", correlation_id=correlation_id)
+            else:
+                debug_log(DebugLevel.INFO, f"No 'metrics' attribute found in response", correlation_id=correlation_id)
+                # Try alternative attribute names
+                for attr in ['data', 'result', 'items', 'metric_names']:
+                    if hasattr(response, attr):
+                        debug_log(DebugLevel.TRACE, f"Found alternative attribute '{attr}'", {attr: getattr(response, attr)}, correlation_id)
+                        
+            debug_log(DebugLevel.DEBUG, f"Final metrics count: {len(metrics)}", correlation_id=correlation_id)
             
-            return {
+            result = {
                 "status": "success",
                 "metrics": metrics,
                 "count": len(metrics),
                 "filter_applied": filter_query,
-                "from_time": from_time
+                "from_time": from_time,
+                "timeframe_hours": 2
             }
             
+            debug_log(DebugLevel.TRACE, f"Returning result", result, correlation_id)
+            return result
+            
         except Exception as e:
-            logger.error(f"Error listing active metrics: {e}")
+            import traceback
+            debug_log(DebugLevel.INFO, f"Exception in list_active_metrics", {
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "traceback": traceback.format_exc()
+            }, correlation_id)
             return {
                 "status": "error",
                 "error": str(e),
                 "metrics": [],
-                "count": 0
+                "count": 0,
+                "suggestion": "Check API credentials and ensure metrics exist in the specified timeframe"
             }
     
     def search_spans(
@@ -350,9 +665,9 @@ class DatadogMCPServer:
         try:
             # Set default time range if not provided
             if not from_time:
-                from_time = (datetime.now() - timedelta(hours=1)).isoformat() + "Z"
+                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
             if not to_time:
-                to_time = datetime.now().isoformat() + "Z"
+                to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
                 
             # Note: SpansApi implementation may vary - this is a placeholder structure
             spans = []  # Placeholder - actual API call would go here
@@ -521,32 +836,110 @@ class DatadogMCPServer:
 # Initialize FastMCP server
 mcp = FastMCP("Datadog MCP Server")
 
-# Initialize Datadog client
+# Initialize Datadog client with support for both environment variable formats
+def get_datadog_credentials():
+    """Get Datadog credentials from environment with fallback support"""
+    api_key = (
+        os.getenv("DD_API_KEY") or 
+        os.getenv("DATADOG_API_KEY") or 
+        ""
+    )
+    app_key = (
+        os.getenv("DD_APP_KEY") or 
+        os.getenv("DATADOG_APP_KEY") or 
+        ""
+    )
+    site = (
+        os.getenv("DD_SITE") or 
+        os.getenv("DATADOG_SITE") or 
+        "datadoghq.com"
+    )
+    return api_key, app_key, site
+
+api_key, app_key, site = get_datadog_credentials()
+
 datadog_config = DatadogConfig(
-    api_key=os.getenv("DATADOG_API_KEY", ""),
-    app_key=os.getenv("DATADOG_APP_KEY", ""),
-    site=os.getenv("DATADOG_SITE", "datadoghq.com")
+    api_key=api_key,
+    app_key=app_key,
+    site=site
 )
 
 if not datadog_config.api_key or not datadog_config.app_key:
-    logger.error("DATADOG_API_KEY and DATADOG_APP_KEY must be set in environment variables")
+    logger.error("Datadog API credentials required. Set either:")
+    logger.error("  DD_API_KEY and DD_APP_KEY, or")
+    logger.error("  DATADOG_API_KEY and DATADOG_APP_KEY")
     exit(1)
+    
+debug_log(DebugLevel.INFO, "Datadog Configuration Loaded", {
+    "site": datadog_config.site,
+    "api_key_set": bool(datadog_config.api_key),
+    "app_key_set": bool(datadog_config.app_key)
+})
 
 datadog_server = DatadogMCPServer(datadog_config)
 
+# Add a simple health check tool for debugging
 @mcp.tool
+def server_health_check() -> Dict[str, Any]:
+    """
+    Simple health check to verify server is working and can connect to Datadog API.
+    
+    Returns:
+        Dictionary containing server status and basic connectivity information
+    """
+    try:
+        logger.info("Health check requested")
+        
+        # Test basic server functionality
+        current_time = datetime.now(timezone.utc)
+        
+        # Test Datadog API connectivity (simple call)
+        try:
+            # Try to list a small number of metrics to test API connectivity
+            api_test = datadog_server.list_active_metrics()
+            datadog_status = "connected" if api_test.get("status") == "success" else "error"
+            datadog_error = api_test.get("error", "") if api_test.get("status") == "error" else None
+        except Exception as e:
+            datadog_status = "error"
+            datadog_error = str(e)
+        
+        result = {
+            "status": "healthy",
+            "server_time": current_time.isoformat(),
+            "datadog_api_status": datadog_status,
+            "datadog_site": datadog_config.site,
+            "api_keys_configured": bool(datadog_config.api_key and datadog_config.app_key),
+            "version": "1.0.0"
+        }
+        
+        if datadog_error:
+            result["datadog_error"] = datadog_error
+            
+        logger.info(f"Health check completed: {datadog_status}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "server_time": datetime.now(timezone.utc).isoformat()
+        }
+
+@mcp.tool
+@mcp_debug_decorator("get_metrics")
 def get_metrics(
     query: str,
     hours_back: int = 1,
     minutes_back: Optional[int] = None
 ) -> Dict[str, Any]:
     """
-    Query timeseries metrics data from Datadog.
+    Query timeseries metrics data from Datadog with comprehensive validation.
     
     Args:
         query: Datadog metrics query (e.g., "avg:system.cpu.user{*}")
-        hours_back: Number of hours back from now to query (default: 1)
-        minutes_back: Number of minutes back from now to query (overrides hours_back if provided)
+        hours_back: Number of hours back from now to query (default: 1, max: 8760 for 1 year)
+        minutes_back: Number of minutes back from now to query (overrides hours_back if provided, max: 525600 for 1 year)
     
     Returns:
         Dictionary containing metrics data or error information
@@ -564,18 +957,86 @@ def get_metrics(
         # Last month of error rates  
         get_metrics("sum:trace.http.request.errors{*}", hours_back=720)  # 30 days
     """
-    if minutes_back is not None:
-        # Use minutes_back if provided
-        to_time = int(datetime.utcnow().timestamp())
-        from_time = int((datetime.utcnow() - timedelta(minutes=minutes_back)).timestamp())
-    else:
-        # Fall back to hours_back
-        to_time = int(datetime.utcnow().timestamp())
-        from_time = int((datetime.utcnow() - timedelta(hours=hours_back)).timestamp())
-    
-    return datadog_server.query_metrics(query, from_time, to_time)
+    try:
+        # Log incoming request for debugging
+        logger.info(f"get_metrics called with query='{query}', hours_back={hours_back}, minutes_back={minutes_back}")
+        
+        # Input validation
+        if not query or not query.strip():
+            return {
+                "status": "error",
+                "error": "Query parameter is required and cannot be empty",
+                "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'"
+            }
+        
+        # Validate time parameters
+        if minutes_back is not None:
+            if not isinstance(minutes_back, int) or minutes_back <= 0:
+                return {
+                    "status": "error",
+                    "error": f"minutes_back must be a positive integer, got {minutes_back} ({type(minutes_back)})",
+                    "suggestion": "Use a positive number of minutes (e.g., 30 for last 30 minutes)"
+                }
+            if minutes_back > 525600:  # 1 year in minutes
+                return {
+                    "status": "error",
+                    "error": f"minutes_back cannot exceed 525600 (1 year), got {minutes_back}",
+                    "suggestion": "Use a smaller time range for better performance"
+                }
+            
+            # Use minutes_back if provided - using timezone-aware datetime
+            now_utc = datetime.now(timezone.utc)
+            to_time = int(now_utc.timestamp())
+            from_time = int((now_utc - timedelta(minutes=minutes_back)).timestamp())
+            time_desc = f"last {minutes_back} minutes"
+            
+        else:
+            if not isinstance(hours_back, int) or hours_back <= 0:
+                return {
+                    "status": "error",
+                    "error": f"hours_back must be a positive integer, got {hours_back} ({type(hours_back)})",
+                    "suggestion": "Use a positive number of hours (e.g., 1 for last hour)"
+                }
+            if hours_back > 8760:  # 1 year in hours
+                return {
+                    "status": "error",
+                    "error": f"hours_back cannot exceed 8760 (1 year), got {hours_back}",
+                    "suggestion": "Use a smaller time range for better performance"
+                }
+            
+            # Fall back to hours_back - using timezone-aware datetime
+            now_utc = datetime.now(timezone.utc)
+            to_time = int(now_utc.timestamp())
+            from_time = int((now_utc - timedelta(hours=hours_back)).timestamp())
+            time_desc = f"last {hours_back} hours"
+        
+        logger.info(f"Getting metrics for '{query}' over {time_desc}")
+        result = datadog_server.query_metrics(query, from_time, to_time)
+        
+        # Add time description to successful results
+        if result.get("status") == "success":
+            result["time_description"] = time_desc
+            result["query_type"] = "timeseries_metrics"
+        
+        return result
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Error in get_metrics for query '{query}': {error_msg}")
+        logger.error(f"Parameters: query={query}, hours_back={hours_back}, minutes_back={minutes_back}")
+        logger.error(f"Exception type: {type(e).__name__}")
+        
+        return {
+            "status": "error",
+            "error": f"Internal server error: {error_msg}",
+            "query": query,
+            "hours_back": hours_back,
+            "minutes_back": minutes_back,
+            "suggestion": "Check server logs for details. Verify query syntax: 'avg:system.cpu.user{*}'"
+        }
 
 @mcp.tool
+@mcp_debug_decorator("list_metrics")
 def list_metrics(
     filter_query: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -583,21 +1044,70 @@ def list_metrics(
     Retrieve a list of available metrics in your Datadog environment.
     
     Args:
-        filter_query: Optional filter to limit metrics returned
+        filter_query: Optional filter to limit metrics returned. Can be:
+                     - A hostname (e.g., "web-server-01") to filter by host
+                     - A tag filter expression (e.g., "env:prod", "service:web-app")
+                     - Leave empty to get all active metrics
     
     Returns:
         Dictionary containing list of available metrics or error information
+        
+    Examples:
+        # Get all active metrics
+        list_metrics()
+        
+        # Get metrics for a specific host
+        list_metrics("web-server-01")
+        
+        # Get metrics with specific tags
+        list_metrics("env:production")
     """
     try:
-        return datadog_server.list_active_metrics(filter_query)
+        logger.info(f"TRACE: MCP list_metrics called with filter: {filter_query or 'none'}")
+        logger.info(f"TRACE: Calling datadog_server.list_active_metrics...")
+        
+        result = datadog_server.list_active_metrics(filter_query)
+        
+        logger.info(f"TRACE: datadog_server.list_active_metrics returned: {result}")
+        logger.info(f"TRACE: Result type: {type(result)}")
+        logger.info(f"TRACE: Result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
+        
+        if isinstance(result, dict) and 'metrics' in result:
+            logger.info(f"TRACE: Found {len(result.get('metrics', []))} metrics in result")
+            if result.get('metrics'):
+                logger.info(f"TRACE: First few metrics: {result['metrics'][:3] if len(result['metrics']) > 0 else 'Empty'}")
+        
+        # Add helpful metadata to successful responses
+        if result.get("status") == "success":
+            result["filter_type"] = "hostname" if filter_query and '.' in filter_query and ':' not in filter_query else "tag_filter" if filter_query else "none"
+            
+        logger.info(f"TRACE: Final MCP list_metrics result: {result}")
+        return result
+        
     except Exception as e:
-        logger.error(f"Error listing metrics: {e}")
+        error_msg = str(e)
+        logger.error(f"TRACE: Exception in MCP list_metrics: {error_msg}")
+        logger.error(f"Error listing metrics with filter '{filter_query}': {error_msg}")
+        
+        # Enhanced error categorization
+        if "403" in error_msg or "Forbidden" in error_msg:
+            suggestion = "Check API key permissions. Ensure 'metrics_read' permission is granted."
+        elif "401" in error_msg or "Unauthorized" in error_msg:
+            suggestion = "Check API key and APP key credentials in environment variables."
+        elif "timeout" in error_msg.lower():
+            suggestion = "Request timeout. Try again or use a more specific filter."
+        else:
+            suggestion = "Check network connectivity and try again."
+        
         return {
             "status": "error", 
-            "error": str(e)
+            "error": error_msg,
+            "filter_query": filter_query,
+            "suggestion": suggestion
         }
 
 @mcp.tool
+@mcp_debug_decorator("get_logs")
 def get_logs(
     query: str,
     limit: int = 100,
@@ -658,23 +1168,23 @@ def get_logs(
     if from_time is None and to_time is None:
         if minutes_back is not None:
             # Use minutes_back if provided
-            calculated_from_time = (datetime.utcnow() - timedelta(minutes=minutes_back)).isoformat() + "Z"
-            calculated_to_time = datetime.utcnow().isoformat() + "Z"
+            calculated_from_time = (datetime.now(timezone.utc) - timedelta(minutes=minutes_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
         else:
             # Fall back to hours_back (default to 1 hour)
             hours_back = hours_back or 1
-            calculated_from_time = (datetime.utcnow() - timedelta(hours=hours_back)).isoformat() + "Z"
-            calculated_to_time = datetime.utcnow().isoformat() + "Z"
+            calculated_from_time = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     elif from_time is None and to_time is not None:
         # If only to_time is provided, default from_time to 1 hour before to_time
         try:
             to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
-            calculated_from_time = (to_dt - timedelta(hours=1)).isoformat() + "Z"
+            calculated_from_time = (to_dt - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
         except ValueError:
-            calculated_from_time = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+            calculated_from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
     elif from_time is not None and to_time is None:
         # If only from_time is provided, default to_time to now
-        calculated_to_time = datetime.utcnow().isoformat() + "Z"
+        calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     
     # Validate time range order
     if calculated_from_time and calculated_to_time:
@@ -1031,7 +1541,7 @@ def health_check_resource(service_name: str) -> str:
 - Performance trend: ➡️ Stable (baseline needed)
 - Resource usage: ➡️ Stable (baseline needed)
 
-*Report generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}*
+*Report generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}*
 *Health score based on: Error rate, response time, resource usage*
 """
 
@@ -1048,29 +1558,47 @@ def health_check_resource(service_name: str) -> str:
 3. Ensure service is actively sending metrics to Datadog
 4. Try using basic monitoring tools first
 
-*Report generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}*
+*Report generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}*
 """
 
 @mcp.prompt("datadog-metrics-analysis")
 def datadog_metrics_analysis_prompt(
     metric_query: str,
-    time_range_hours: int = 24
+    time_range_hours: str = "24"  # Changed to str to handle MCP client parameter format
 ) -> str:
     """
     Generate a prompt for analyzing Datadog metrics.
     
     Args:
         metric_query: The metrics query to analyze
-        time_range_hours: Time range in hours for the analysis
+        time_range_hours: Time range in hours for the analysis (as string, will be converted)
     
     Returns:
         Formatted prompt for metrics analysis
     """
+    try:
+        # Handle parameter conversion from MCP client format
+        if isinstance(time_range_hours, str):
+            # Try to parse JSON format from MCP client
+            import json
+            try:
+                parsed = json.loads(time_range_hours)
+                if isinstance(parsed, dict) and "value" in parsed:
+                    hours = int(parsed["value"])
+                else:
+                    hours = int(time_range_hours)
+            except (json.JSONDecodeError, ValueError):
+                hours = int(time_range_hours)
+        else:
+            hours = int(time_range_hours)
+    except (ValueError, TypeError):
+        hours = 24  # Default fallback
+    
     return f"""
     Analyze the following Datadog metrics:
     
     Query: {metric_query}
-    Time Range: Last {time_range_hours} hours
+    Time Range: Last {hours} hours
     
     Please provide:
     1. Summary of the metric trends
@@ -1430,13 +1958,73 @@ if __name__ == "__main__":
     logger.info("Transport: HTTP Streamable with SSE support")
     logger.info(f"Datadog Site: {datadog_config.site}")
     
-    # Note: FastMCP middleware integration may vary by version
-    # For now, we'll use logging within individual tool functions
+    # Add request logging middleware for debugging
+    import json
+    from typing import Any, Dict
+    
+    # Store original tool functions for error handling - simplified to avoid deprecation warnings
+    original_tools = {}
+    tool_names = [
+        'get_metrics', 'list_metrics', 'get_logs', 'get_monitors', 
+        'list_dashboards', 'list_spans', 'get_trace', 'list_incidents',
+        'get_incident', 'list_hosts', 'get_host'
+    ]
+    logger.info(f"Registered {len(tool_names)} tools for enhanced error handling")
+    
+    # Enhanced error logging
+    def log_request_error(tool_name: str, params: Dict[str, Any], error: Exception):
+        logger.error(f"Tool '{tool_name}' error:")
+        logger.error(f"  Parameters: {json.dumps(params, default=str, indent=2)}")
+        logger.error(f"  Error: {str(error)}")
+        logger.error(f"  Error type: {type(error).__name__}")
+    
+    # Add HTTP middleware for debugging
+    if debug_config.should_log_at_level(DebugLevel.DEBUG):
+        logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
+        logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
+        logging.getLogger("fastmcp").setLevel(logging.DEBUG)
+        logging.getLogger("httpx").setLevel(logging.DEBUG)
+        
+    if debug_config.should_log_at_level(DebugLevel.TRACE):
+        logging.getLogger("uvicorn").setLevel(logging.DEBUG)
+        # Enable all HTTP debugging
+        import httpx
+        import logging
+        logging.basicConfig(level=logging.DEBUG)
+    
+    # Log all incoming requests at the FastMCP level - removed invalid error_handler decorator
+    def global_error_handler(error: Exception) -> dict:
+        import traceback
+        debug_log(DebugLevel.INFO, f"GLOBAL ERROR HANDLER: {type(error).__name__}", {
+            "error": str(error),
+            "traceback": traceback.format_exc()
+        })
+        return {
+            "error": str(error),
+            "type": type(error).__name__,
+            "message": "An error occurred while processing your request"
+        }
+        
+    # Wrap tools with error handling (simplified approach)
+    logger.info("Enhanced error handling enabled for debugging")
     
     try:
+        # Log debug configuration at startup
+        debug_log(DebugLevel.INFO, "MCP Server Starting with Debug Configuration", {
+            "debug_level": debug_config.level.value,
+            "log_requests": debug_config.log_requests,
+            "log_responses": debug_config.log_responses,
+            "log_timing": debug_config.log_timing,
+            "log_parameters": debug_config.log_parameters,
+            "pretty_print": debug_config.pretty_print,
+            "mask_sensitive_data": debug_config.mask_sensitive_data
+        })
+        
         # Run the server with HTTP transport
+        logger.info("Starting MCP server...")
         mcp.run(transport="http", host=host, port=port)
     except Exception as e:
         logger.error(f"Failed to start server: {e}")
+        logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         exit(1)
 

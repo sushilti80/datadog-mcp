@@ -70,6 +70,8 @@ The server will start on `http://0.0.0.0:8080/mcp/`
 ## 🔧 Configuration
 
 ### Environment Variables
+
+#### Core Configuration
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `DD_API_KEY` | Datadog API Key | - | ✅ |
@@ -77,6 +79,24 @@ The server will start on `http://0.0.0.0:8080/mcp/`
 | `DD_SITE` | Datadog Site | `datadoghq.com` | ❌ |
 | `MCP_SERVER_HOST` | Server host | `0.0.0.0` | ❌ |
 | `MCP_SERVER_PORT` | Server port | `8080` | ❌ |
+
+#### Debug Configuration
+| Variable | Description | Default | Options |
+|----------|-------------|---------|---------|
+| `MCP_DEBUG_LEVEL` | Debug logging level | `INFO` | `NONE`, `INFO`, `DEBUG`, `TRACE` |
+| `MCP_DEBUG_REQUESTS` | Log incoming MCP requests | `false` | `true`, `false` |
+| `MCP_DEBUG_RESPONSES` | Log outgoing MCP responses | `false` | `true`, `false` |
+| `MCP_DEBUG_TIMING` | Include execution timing | `false` | `true`, `false` |
+| `MCP_DEBUG_PARAMETERS` | Log function parameters | `false` | `true`, `false` |
+| `MCP_DEBUG_PRETTY_PRINT` | Pretty print JSON in logs | `true` | `true`, `false` |
+| `MCP_DEBUG_ERRORS` | Enhanced error logging | `true` | `true`, `false` |
+| `MCP_DEBUG_MASK_SENSITIVE` | Mask API keys in logs | `true` | `true`, `false` |
+
+#### Debug Level Guide
+- **`NONE`**: Minimal logging, warnings and errors only
+- **`INFO`**: Basic operation logs and debug messages  
+- **`DEBUG`**: Detailed function calls, API requests/responses
+- **`TRACE`**: Full request/response payloads, parameter details
 
 ### Datadog Sites
 - **US1**: `datadoghq.com` (default)
@@ -471,6 +491,29 @@ python3 datadog_mcp_server.py
 2. Limit log search results with `limit` parameter
 3. Use `minutes_back` for precise short-term analysis
 4. Consider pagination for large datasets
+
+#### Debug and Tracing
+For troubleshooting MCP communication and API issues:
+
+```bash
+# Enable full debug tracing
+export MCP_DEBUG_LEVEL=TRACE
+export MCP_DEBUG_REQUESTS=true
+export MCP_DEBUG_RESPONSES=true
+export MCP_DEBUG_TIMING=true
+export MCP_DEBUG_PARAMETERS=true
+
+# Start server with debug enabled
+python3 datadog_mcp_server.py
+```
+
+**Debug Use Cases:**
+- **400 Bad Request Errors**: Enable `MCP_DEBUG_REQUESTS=true` to see exact request payloads
+- **Empty Results**: Use `MCP_DEBUG_LEVEL=DEBUG` to trace API calls and responses
+- **Performance Issues**: Enable `MCP_DEBUG_TIMING=true` to identify slow operations
+- **Parameter Validation**: Use `MCP_DEBUG_PARAMETERS=true` to debug argument parsing
+
+**Security Note**: In production, keep `MCP_DEBUG_MASK_SENSITIVE=true` to prevent API keys from appearing in logs.
 
 ## 🚀 Production Deployment
 
