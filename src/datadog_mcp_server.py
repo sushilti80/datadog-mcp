@@ -12,6 +12,7 @@ import logging
 import json
 import time
 import uuid
+import traceback
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
@@ -508,12 +509,15 @@ class DatadogMCPServer:
                 "to_time": to_time if 'to_time' in locals() else None
             }
     
-    def get_monitors(self, group_states: Optional[List[str]] = None) -> Dict[str, Any]:
+    def get_monitors(self, group_states: Optional[str] = None) -> Dict[str, Any]:
         """Get Datadog monitors"""
         try:
-            response = self.monitors_api.list_monitors(
-                group_states=group_states
-            )
+            # Only pass group_states if it's not None to avoid the API error
+            kwargs = {}
+            if group_states is not None:
+                kwargs['group_states'] = group_states
+            
+            response = self.monitors_api.list_monitors(**kwargs)
             
             monitors = []
             for monitor in response:
@@ -1243,13 +1247,14 @@ def get_next_datadog_logs_page(cursor: str, limit: int = 100) -> Dict[str, Any]:
 
 @mcp.tool
 def get_monitors(
-    group_states: Optional[List[str]] = None
+    group_states: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Get Datadog monitors, optionally filtered by group states.
     
     Args:
-        group_states: List of group states to filter by (e.g., ["Alert", "Warn"])
+        group_states: Comma-separated group states to filter by (e.g., "alert,warn" or "all")
+                     Valid values: "all", "alert", "warn", "no data"
     
     Returns:
         Dictionary containing monitor data or error information
@@ -1991,6 +1996,34 @@ if __name__ == "__main__":
         import httpx
         import logging
         logging.basicConfig(level=logging.DEBUG)
+    
+    # Enhanced logging for MCP protocol errors
+    def log_mcp_error(operation: str, error: Exception, context: dict = None):
+        """Log MCP protocol errors with detailed context"""
+        debug_log(DebugLevel.ERROR, f"MCP {operation} Error", {
+            "operation": operation,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "context": context or {},
+            "traceback": traceback.format_exc()
+        })
+    
+    # Override FastMCP error handling if possible
+    try:
+        # Try to access internal FastMCP components for enhanced error logging
+        if hasattr(mcp, '_server') and hasattr(mcp._server, 'error_handler'):
+            original_error_handler = mcp._server.error_handler
+            
+            def enhanced_error_handler(error: Exception):
+                log_mcp_error("Protocol", error, {"original_handler": "FastMCP"})
+                return original_error_handler(error) if original_error_handler else {"error": str(error)}
+            
+            mcp._server.error_handler = enhanced_error_handler
+            logger.info("Enhanced FastMCP error handler installed")
+        else:
+            logger.info("FastMCP error handler not accessible - using global error handling")
+    except Exception as e:
+        logger.warning(f"Could not enhance FastMCP error handling: {e}")
     
     # Log all incoming requests at the FastMCP level - removed invalid error_handler decorator
     def global_error_handler(error: Exception) -> dict:
