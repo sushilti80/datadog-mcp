@@ -30,6 +30,13 @@ from datadog_api_client.v1.api.logs_api import LogsApi
 from datadog_api_client.v1.api.monitors_api import MonitorsApi
 from datadog_api_client.v1.api.dashboards_api import DashboardsApi
 
+# Import key rotation system
+from key_rotation import (
+    KeyPair, KeyPoolManager, KeyHealth, RotationStrategy,
+    load_keys_from_environment, get_rotation_config, 
+    create_retry_decorator, detect_rate_limit_error
+)
+
 # Debug Configuration System
 class DebugLevel(Enum):
     NONE = "NONE"
@@ -224,37 +231,71 @@ debug_log(DebugLevel.INFO, "Debug Configuration Loaded", {
 
 @dataclass
 class DatadogConfig:
-    """Configuration for Datadog API client"""
-    api_key: str
-    app_key: str
-    site: str = "datadoghq.com"
+    """Configuration for Datadog API client with key rotation support"""
+    key_pool: KeyPoolManager
+    primary_site: str = "datadoghq.com"
 
 class DatadogMCPServer:
-    """Datadog MCP Server implementation"""
+    """Datadog MCP Server implementation with intelligent key rotation"""
     
     def __init__(self, config: DatadogConfig):
         self.config = config
-        self.api_client = self._setup_api_client()
-        self.metrics_api = MetricsApi(self.api_client)
-        self.logs_api = LogsApi(self.api_client)
-        self.logs_api_v2 = LogsApiV2(self.api_client)
-        self.monitors_api = MonitorsApi(self.api_client)
-        self.dashboards_api = DashboardsApi(self.api_client)
-        self.hosts_api = HostsApi(self.api_client)
-        self.spans_api = SpansApi(self.api_client)
-        self.incidents_api = IncidentsApi(self.api_client)
+        self.key_pool = config.key_pool
         
-    def _setup_api_client(self) -> ApiClient:
-        """Setup Datadog API client with configuration"""
-        configuration = Configuration()
-        configuration.api_key["apiKeyAuth"] = self.config.api_key
-        configuration.api_key["appKeyAuth"] = self.config.app_key
-        configuration.server_variables["site"] = self.config.site
-        return ApiClient(configuration)
+        # Create API clients - these will be recreated per request with different keys
+        self._api_client_cache = {}
+        
+        # Start health monitoring
+        self.key_pool.start_health_monitoring()
+        
+    def _get_api_client(self, key_pair: KeyPair) -> ApiClient:
+        """Get or create API client for a specific key pair"""
+        cache_key = f"{key_pair.id}_{key_pair.api_key[:8]}"
+        
+        if cache_key not in self._api_client_cache:
+            configuration = Configuration()
+            configuration.api_key["apiKeyAuth"] = key_pair.api_key
+            configuration.api_key["appKeyAuth"] = key_pair.app_key
+            configuration.server_variables["site"] = key_pair.site
+            
+            self._api_client_cache[cache_key] = ApiClient(configuration)
+            debug_log(DebugLevel.DEBUG, f"Created API client for key {key_pair.id}", {
+                "site": key_pair.site,
+                "cache_key": cache_key
+            })
+        
+        return self._api_client_cache[cache_key]
+    
+    def _execute_with_key_rotation(self, operation_name: str, operation_func):
+        """
+        Execute an operation with automatic key rotation on rate limits
+        
+        Args:
+            operation_name: Name of the operation for logging
+            operation_func: Function that takes (key_pair, api_client) and executes the API call
+        """
+        @create_retry_decorator(self.key_pool, max_retries=min(3, len(self.key_pool.keys)))
+        def _wrapped_operation(key_pair: KeyPair, *args, **kwargs):
+            api_client = self._get_api_client(key_pair)
+            
+            debug_log(DebugLevel.DEBUG, f"Executing {operation_name} with key {key_pair.id}")
+            
+            try:
+                result = operation_func(key_pair, api_client, *args, **kwargs)
+                debug_log(DebugLevel.TRACE, f"{operation_name} successful with key {key_pair.id}")
+                return result
+            except Exception as e:
+                debug_log(DebugLevel.INFO, f"{operation_name} failed with key {key_pair.id}", {
+                    "error": str(e),
+                    "error_type": type(e).__name__
+                })
+                raise
+        
+        return _wrapped_operation()
     
     def query_metrics(self, query: str, from_time: int, to_time: int) -> Dict[str, Any]:
         """
-        Query Datadog metrics with comprehensive error handling and validation
+        Query Datadog metrics with comprehensive error handling and key rotation
         
         Args:
             query: Datadog metrics query string
@@ -299,11 +340,16 @@ class DatadogMCPServer:
             
             logger.info(f"Querying metrics: {query} from {from_time} to {to_time}")
             
-            response = self.metrics_api.query_metrics(
-                _from=from_time,
-                to=to_time,
-                query=query
-            )
+            # Execute with key rotation
+            def _query_operation(key_pair: KeyPair, api_client: ApiClient):
+                metrics_api = MetricsApi(api_client)
+                return metrics_api.query_metrics(
+                    _from=from_time,
+                    to=to_time,
+                    query=query
+                )
+            
+            response = self._execute_with_key_rotation("query_metrics", _query_operation)
             
             # Enhanced response processing
             series_data = []
@@ -318,7 +364,8 @@ class DatadogMCPServer:
                 "to_time": to_time,
                 "duration_hours": round((to_time - from_time) / 3600, 2),
                 "series_count": len(series_data),
-                "series": series_data
+                "series": series_data,
+                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
             }
             
             # Add helpful metadata
@@ -345,7 +392,7 @@ class DatadogMCPServer:
             elif "timeout" in error_msg.lower():
                 suggestion = "Query timeout. Try reducing time range or simplifying query."
             elif "rate limit" in error_msg.lower():
-                suggestion = "API rate limit exceeded. Wait a moment before retrying."
+                suggestion = "API rate limit exceeded. Key rotation should handle this automatically."
             else:
                 suggestion = "Check network connectivity and Datadog service status."
             
@@ -355,7 +402,8 @@ class DatadogMCPServer:
                 "query": query,
                 "suggestion": suggestion,
                 "from_time": from_time,
-                "to_time": to_time
+                "to_time": to_time,
+                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
             }
     
     def search_logs(
@@ -370,7 +418,7 @@ class DatadogMCPServer:
         max_total_logs: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Search Datadog logs with enhanced flexibility and pagination support.
+        Search Datadog logs with enhanced flexibility, pagination support, and key rotation.
         
         Args:
             query: Log search query (e.g., "service:web-app ERROR")
@@ -396,86 +444,94 @@ class DatadogMCPServer:
             if max_total_logs is None:
                 max_total_logs = limit
             
-            # Prepare filter
-            log_filter = {
-                "query": query,
-                "from": from_time,
-                "to": to_time
-            }
-            
-            if indexes:
-                log_filter["indexes"] = indexes
-            
-            # Prepare page parameters
-            page_params = {"limit": page_limit}
-            if cursor:
-                page_params["cursor"] = cursor
-            
-            # Convert sort parameter to enum
-            sort_order = LogsSortV2.TIMESTAMP_DESCENDING if sort == "-timestamp" else LogsSortV2.TIMESTAMP_ASCENDING
-            
-            body = LogsListRequestV2(
-                filter=log_filter,
-                sort=sort_order,
-                page=page_params
-            )
-            
-            all_logs = []
-            next_cursor = None
-            total_retrieved = 0
-            
-            # Pagination loop to retrieve more logs if needed
-            while total_retrieved < max_total_logs:
-                # Update cursor for subsequent requests
-                if next_cursor:
-                    body.page["cursor"] = next_cursor
+            # Execute with key rotation
+            def _search_logs_operation(key_pair: KeyPair, api_client: ApiClient):
+                logs_api_v2 = LogsApiV2(api_client)
                 
-                # Adjust limit for final page
-                remaining = max_total_logs - total_retrieved
-                if remaining < page_limit:
-                    body.page["limit"] = remaining
+                # Prepare filter
+                log_filter = {
+                    "query": query,
+                    "from": from_time,
+                    "to": to_time
+                }
                 
-                response = self.logs_api_v2.list_logs(body=body)
+                if indexes:
+                    log_filter["indexes"] = indexes
                 
-                # Process logs from this page
-                page_logs = []
-                if hasattr(response, 'data') and response.data:
-                    for log in response.data:
-                        log_entry = {
-                            "id": getattr(log, 'id', ''),
-                            "timestamp": getattr(log.attributes, 'timestamp', '') if hasattr(log, 'attributes') else '',
-                            "message": getattr(log.attributes, 'message', '') if hasattr(log, 'attributes') else '',
-                            "service": getattr(log.attributes, 'service', '') if hasattr(log, 'attributes') else '',
-                            "status": getattr(log.attributes, 'status', '') if hasattr(log, 'attributes') else '',
-                            "tags": getattr(log.attributes, 'tags', []) if hasattr(log, 'attributes') else [],
-                            "host": getattr(log.attributes, 'host', '') if hasattr(log, 'attributes') else '',
-                            "source": getattr(log.attributes, 'ddsource', '') if hasattr(log, 'attributes') else ''
-                        }
-                        
-                        # Add custom attributes if they exist
-                        if hasattr(log, 'attributes') and hasattr(log.attributes, 'attributes'):
-                            log_entry["custom_attributes"] = log.attributes.attributes
-                        
-                        page_logs.append(log_entry)
-                        total_retrieved += 1
-                        
-                        if total_retrieved >= max_total_logs:
+                # Prepare page parameters
+                page_params = {"limit": page_limit}
+                if cursor:
+                    page_params["cursor"] = cursor
+                
+                # Convert sort parameter to enum
+                sort_order = LogsSortV2.TIMESTAMP_DESCENDING if sort == "-timestamp" else LogsSortV2.TIMESTAMP_ASCENDING
+                
+                body = LogsListRequestV2(
+                    filter=log_filter,
+                    sort=sort_order,
+                    page=page_params
+                )
+                
+                all_logs = []
+                next_cursor = None
+                total_retrieved = 0
+                
+                # Pagination loop to retrieve more logs if needed
+                while total_retrieved < max_total_logs:
+                    # Update cursor for subsequent requests
+                    if next_cursor:
+                        body.page["cursor"] = next_cursor
+                    
+                    # Adjust limit for final page
+                    remaining = max_total_logs - total_retrieved
+                    if remaining < page_limit:
+                        body.page["limit"] = remaining
+                    
+                    response = logs_api_v2.list_logs(body=body)
+                    
+                    # Process logs from this page
+                    page_logs = []
+                    if hasattr(response, 'data') and response.data:
+                        for log in response.data:
+                            log_entry = {
+                                "id": getattr(log, 'id', ''),
+                                "timestamp": getattr(log.attributes, 'timestamp', '') if hasattr(log, 'attributes') else '',
+                                "message": getattr(log.attributes, 'message', '') if hasattr(log, 'attributes') else '',
+                                "service": getattr(log.attributes, 'service', '') if hasattr(log, 'attributes') else '',
+                                "status": getattr(log.attributes, 'status', '') if hasattr(log, 'attributes') else '',
+                                "tags": getattr(log.attributes, 'tags', []) if hasattr(log, 'attributes') else [],
+                                "host": getattr(log.attributes, 'host', '') if hasattr(log, 'attributes') else '',
+                                "source": getattr(log.attributes, 'ddsource', '') if hasattr(log, 'attributes') else ''
+                            }
+                            
+                            # Add custom attributes if they exist
+                            if hasattr(log, 'attributes') and hasattr(log.attributes, 'attributes'):
+                                log_entry["custom_attributes"] = log.attributes.attributes
+                            
+                            page_logs.append(log_entry)
+                            total_retrieved += 1
+                            
+                            if total_retrieved >= max_total_logs:
+                                break
+                    
+                    all_logs.extend(page_logs)
+                    
+                    # Check if there are more pages
+                    if hasattr(response, 'links') and hasattr(response.links, 'next') and response.links.next:
+                        # Extract cursor from next link if available
+                        next_cursor = getattr(response.meta, 'page', {}).get('after') if hasattr(response, 'meta') else None
+                        if not next_cursor:
                             break
-                
-                all_logs.extend(page_logs)
-                
-                # Check if there are more pages
-                if hasattr(response, 'links') and hasattr(response.links, 'next') and response.links.next:
-                    # Extract cursor from next link if available
-                    next_cursor = getattr(response.meta, 'page', {}).get('after') if hasattr(response, 'meta') else None
-                    if not next_cursor:
+                    else:
                         break
-                else:
-                    break
+                    
+                    # If we got fewer logs than requested, we've reached the end
+                    if len(page_logs) < body.page["limit"]:
+                        break
                 
-                # If we got fewer logs than requested, we've reached the end
-                if len(page_logs) < body.page["limit"]:
-                    break
+                return all_logs, next_cursor, total_retrieved
+            
+            all_logs, next_cursor, total_retrieved = self._execute_with_key_rotation("search_logs", _search_logs_operation)
             
             # Prepare response with pagination info
             result = {
@@ -487,7 +543,8 @@ class DatadogMCPServer:
                 "from_time": from_time,
                 "to_time": to_time,
                 "sort": sort,
-                "indexes_searched": indexes or ["all"]
+                "indexes_searched": indexes or ["all"],
+                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
             }
             
             # Add pagination cursor if available for next request
@@ -506,7 +563,8 @@ class DatadogMCPServer:
                 "error": str(e),
                 "query": query,
                 "from_time": from_time if 'from_time' in locals() else None,
-                "to_time": to_time if 'to_time' in locals() else None
+                "to_time": to_time if 'to_time' in locals() else None,
+                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
             }
     
     def get_monitors(self, group_states: Optional[str] = None) -> Dict[str, Any]:
@@ -840,45 +898,91 @@ class DatadogMCPServer:
 # Initialize FastMCP server
 mcp = FastMCP("Datadog MCP Server")
 
-# Initialize Datadog client with support for both environment variable formats
+# Initialize Datadog client with key rotation support
 def get_datadog_credentials():
-    """Get Datadog credentials from environment with fallback support"""
-    api_key = (
-        os.getenv("DD_API_KEY") or 
-        os.getenv("DATADOG_API_KEY") or 
-        ""
-    )
-    app_key = (
-        os.getenv("DD_APP_KEY") or 
-        os.getenv("DATADOG_APP_KEY") or 
-        ""
-    )
-    site = (
-        os.getenv("DD_SITE") or 
-        os.getenv("DATADOG_SITE") or 
-        "datadoghq.com"
-    )
-    return api_key, app_key, site
+    """Get Datadog credentials from environment with key rotation support"""
+    try:
+        # Load multiple key pairs from environment
+        key_pairs = load_keys_from_environment()
+        
+        # Get rotation configuration
+        rotation_config = get_rotation_config()
+        
+        # Create key pool manager
+        key_pool = KeyPoolManager(
+            rotation_strategy=rotation_config["strategy"],
+            circuit_breaker_threshold=rotation_config["circuit_breaker_threshold"],
+            circuit_breaker_timeout=rotation_config["circuit_breaker_timeout"],
+            health_check_interval=rotation_config["health_check_interval"]
+        )
+        
+        # Add all keys to the pool
+        for key_pair in key_pairs:
+            key_pool.add_key(key_pair)
+        
+        # Get primary site (from first key or environment)
+        primary_site = key_pairs[0].site if key_pairs else "datadoghq.com"
+        
+        return key_pool, primary_site
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Datadog key rotation: {e}")
+        # Fallback to single key mode for backwards compatibility
+        api_key = (
+            os.getenv("DD_API_KEY") or 
+            os.getenv("DATADOG_API_KEY") or 
+            ""
+        )
+        app_key = (
+            os.getenv("DD_APP_KEY") or 
+            os.getenv("DATADOG_APP_KEY") or 
+            ""
+        )
+        site = (
+            os.getenv("DD_SITE") or 
+            os.getenv("DATADOG_SITE") or 
+            "datadoghq.com"
+        )
+        
+        if not api_key or not app_key:
+            raise ValueError("Datadog API credentials required")
+        
+        # Create single-key pool for backwards compatibility
+        key_pool = KeyPoolManager()
+        key_pair = KeyPair(
+            id="fallback",
+            api_key=api_key,
+            app_key=app_key,
+            site=site
+        )
+        key_pool.add_key(key_pair)
+        
+        return key_pool, site
 
-api_key, app_key, site = get_datadog_credentials()
-
-datadog_config = DatadogConfig(
-    api_key=api_key,
-    app_key=app_key,
-    site=site
-)
-
-if not datadog_config.api_key or not datadog_config.app_key:
-    logger.error("Datadog API credentials required. Set either:")
-    logger.error("  DD_API_KEY and DD_APP_KEY, or")
-    logger.error("  DATADOG_API_KEY and DATADOG_APP_KEY")
-    exit(1)
+try:
+    key_pool, primary_site = get_datadog_credentials()
     
-debug_log(DebugLevel.INFO, "Datadog Configuration Loaded", {
-    "site": datadog_config.site,
-    "api_key_set": bool(datadog_config.api_key),
-    "app_key_set": bool(datadog_config.app_key)
-})
+    datadog_config = DatadogConfig(
+        key_pool=key_pool,
+        primary_site=primary_site
+    )
+    
+    # Log key pool status
+    pool_status = key_pool.get_pool_status()
+    debug_log(DebugLevel.INFO, "Datadog Key Pool Initialized", {
+        "total_keys": pool_status["total_keys"],
+        "available_keys": pool_status["available_keys"], 
+        "rotation_strategy": pool_status["rotation_strategy"],
+        "primary_site": primary_site
+    })
+    
+    if pool_status["total_keys"] == 0:
+        logger.error("No valid Datadog API keys available")
+        exit(1)
+        
+except Exception as e:
+    logger.error(f"Failed to initialize Datadog configuration: {e}")
+    exit(1)
 
 datadog_server = DatadogMCPServer(datadog_config)
 
@@ -907,13 +1011,21 @@ def server_health_check() -> Dict[str, Any]:
             datadog_status = "error"
             datadog_error = str(e)
         
+        # Get key pool status
+        key_pool_status = datadog_server.key_pool.get_pool_status()
+        
         result = {
             "status": "healthy",
             "server_time": current_time.isoformat(),
             "datadog_api_status": datadog_status,
-            "datadog_site": datadog_config.site,
-            "api_keys_configured": bool(datadog_config.api_key and datadog_config.app_key),
-            "version": "1.0.0"
+            "datadog_site": datadog_config.primary_site,
+            "version": "1.1.0",
+            "key_rotation": {
+                "enabled": True,
+                "total_keys": key_pool_status["total_keys"],
+                "available_keys": key_pool_status["available_keys"],
+                "rotation_strategy": key_pool_status["rotation_strategy"]
+            }
         }
         
         if datadog_error:
@@ -928,6 +1040,50 @@ def server_health_check() -> Dict[str, Any]:
             "status": "unhealthy",
             "error": str(e),
             "server_time": datetime.now(timezone.utc).isoformat()
+        }
+
+@mcp.tool
+def get_key_pool_status() -> Dict[str, Any]:
+    """
+    Get detailed status of the API key pool for monitoring and debugging.
+    
+    Returns:
+        Dictionary containing comprehensive key pool metrics and health information
+    """
+    try:
+        status = datadog_server.key_pool.get_pool_status()
+        
+        # Add additional context
+        status["monitoring"] = {
+            "health_check_enabled": datadog_server.key_pool._health_check_thread is not None,
+            "circuit_breaker_threshold": datadog_server.key_pool.circuit_breaker_threshold,
+            "circuit_breaker_timeout": datadog_server.key_pool.circuit_breaker_timeout
+        }
+        
+        # Add recommendations
+        recommendations = []
+        if status["available_keys"] == 0:
+            recommendations.append("⚠️ No available keys - check key health and authentication")
+        elif status["available_keys"] == 1:
+            recommendations.append("⚠️ Only one key available - consider adding more keys for redundancy")
+        elif status["available_keys"] < status["total_keys"]:
+            recommendations.append(f"ℹ️ {status['total_keys'] - status['available_keys']} keys currently unavailable")
+        
+        # Check for keys with low success rates
+        for key_info in status["keys"]:
+            if key_info["success_rate"] < 0.8 and key_info["total_requests"] > 10:
+                recommendations.append(f"⚠️ Key {key_info['id']} has low success rate ({key_info['success_rate']:.1%})")
+        
+        status["recommendations"] = recommendations
+        status["status"] = "success"
+        
+        return status
+        
+    except Exception as e:
+        logger.error(f"Error getting key pool status: {e}")
+        return {
+            "status": "error",
+            "error": str(e)
         }
 
 @mcp.tool
@@ -1961,7 +2117,7 @@ if __name__ == "__main__":
     
     logger.info(f"Starting Datadog MCP Server on {host}:{port}")
     logger.info("Transport: HTTP Streamable with SSE support")
-    logger.info(f"Datadog Site: {datadog_config.site}")
+    logger.info(f"Datadog Site: {datadog_config.primary_site}")
     
     # Add request logging middleware for debugging
     import json

@@ -4,7 +4,118 @@
 
 A production-ready MCP server that provides AI agents with intelligent access to Datadog monitoring data, metrics, logs, and advanced troubleshooting workflows through HTTP streamable transport with Server-Sent Events (SSE) support.
 
+---
+
+## 🚀 **NEW: Contributing to This Project?**
+
+### **👉 [START_HERE.md](START_HERE.md) ← Open this first!** (30 seconds)
+
+Learn how to add tools, write tests, debug issues, or update docs using our **6-Agent Development System**.  
+No confusion, no scattered docs - just clear templates and checklists.
+
+**Or pick your path:**
+- ✅ **5-min quick start** → [AGENTS_QUICK_START.md](AGENTS_QUICK_START.md)
+- ✅ **Pick your agent** → [AGENT_DECISION_TREE.md](AGENT_DECISION_TREE.md)  
+- ✅ **Task-specific guides** → [AGENTS.md](AGENTS.md)
+- ✅ **Visual workflows** → [WORKFLOW.md](WORKFLOW.md)
+- ✅ **Complete system guide** → [AGENT_SYSTEM_GUIDE.md](AGENT_SYSTEM_GUIDE.md)
+
+---
+
 ![FastMCP](https://img.shields.io/badge/FastMCP-2.10.6-blue) ![MCP](https://img.shields.io/badge/MCP-1.12.2-green) ![Python](https://img.shields.io/badge/Python-3.12+-yellow) ![Datadog](https://img.shields.io/badge/Datadog-API-purple)
+
+## 📚 Contributing & Development
+
+**Want to add a new tool, resource, prompt, or fix a bug?** Start here:
+- **[AGENTS_QUICK_START.md](AGENTS_QUICK_START.md)** ← Read this first (5 min overview)
+- **[AGENTS.md](AGENTS.md)** ← Complete task-specific guides with templates
+- **[.github/copilot-instructions.md](.github/copilot-instructions.md)** ← Code patterns & architecture
+
+Pick your task, follow the agent guide, and you'll be productive in minutes!
+
+## 🆕 What's New
+
+### Version 1.1.0 (September 2025)
+- **🔄 Multi-Key Rotation System**: Intelligent API key rotation to handle rate limiting proactively
+- **Enhanced Debug System**: Comprehensive debug tracing with correlation IDs and performance timing
+- **AI-Powered Prompts**: New intelligent prompts for incident response and performance diagnosis
+- **Advanced Time Range Support**: Flexible minute/hour-based time parameters with smart defaults
+- **Health Check Resources**: Comprehensive service health assessment with AI recommendations
+- **Cursor-Based Pagination**: Efficient handling of large log datasets with pagination support
+- **Production-Ready Logging**: Configurable debug levels with sensitive data masking
+- **Error Handling**: Enhanced error categorization with actionable suggestions
+
+### Recent Improvements
+- Added support for all major Datadog sites (US1, US3, US5, EU1, AP1, GOV)
+- Implemented smart parameter validation with helpful error messages
+- Enhanced resource endpoints with detailed metadata and analysis
+- Added time range advisor for optimal query performance
+- Improved MCP protocol compliance with FastMCP optimizations
+- **🔄 Intelligent Key Rotation**: Multi-key support with automatic rate limit handling
+- **📈 Throughput Scaling**: 3-5x increased API capacity with multiple keys
+- **🛡️ Circuit Breaker Protection**: Automatic isolation of problematic keys
+
+## 🎯 Use Cases
+
+### 🤖 AI Agent Automation
+Perfect for powering AI agents that need autonomous access to observability data:
+
+#### **Incident Response Bot**
+```python
+# Automated incident detection and response
+1. Monitor error rates: get_logs("status:error", minutes_back=5)
+2. Analyze impact: get_metrics("error.rate", hours_back=1) 
+3. Generate response plan: datadog-incident-commander prompt
+4. Execute mitigation steps based on AI recommendations
+```
+
+#### **Performance Optimization Assistant**
+```python
+# Proactive performance monitoring
+1. Baseline analysis: get_metrics("response.time", hours_back=24)
+2. Anomaly detection: Compare current vs historical patterns
+3. Root cause analysis: datadog-performance-diagnosis prompt
+4. Optimization recommendations with business impact
+```
+
+#### **Capacity Planning Advisor** 
+```python
+# Data-driven capacity decisions
+1. Trend analysis: get_metrics("cpu,memory,disk", hours_back=720)
+2. Growth forecasting: Historical pattern analysis
+3. Resource optimization: Identify over/under-provisioned resources
+4. Cost optimization: Resource efficiency recommendations
+```
+
+### 🏢 Enterprise Monitoring
+Streamline enterprise observability workflows:
+
+#### **Multi-Service Health Dashboard**
+```python
+# Comprehensive service ecosystem monitoring
+services = ["api-gateway", "user-service", "payment-service"]
+for service in services:
+    health = datadog://health-check/{service}
+    # Aggregate health scores, identify dependencies
+```
+
+#### **SLA Monitoring and Reporting**
+```python
+# Automated SLA compliance tracking
+1. Error rate monitoring: get_logs("service:api status:error")
+2. Performance tracking: get_metrics("p95.response.time")
+3. Availability calculation: Uptime percentage analysis
+4. Executive reporting: Business-friendly metrics translation
+```
+
+#### **Security Investigation Workflows**
+```python
+# Automated security incident response
+1. Threat detection: get_logs("auth.failure OR 403 OR suspicious")
+2. Impact assessment: Identify affected services and users
+3. Timeline reconstruction: Correlate events across services
+4. Remediation guidance: Security-focused recommendations
+```
 
 ## ✨ Features
 
@@ -15,6 +126,7 @@ A production-ready MCP server that provides AI agents with intelligent access to
 - **`get_next_datadog_logs_page`** - Cursor-based pagination for large log sets
 - **`get_monitors`** - Monitor status and management
 - **`list_dashboards`** - Dashboard discovery and listing
+- **`get_key_pool_status`** - 🔄 Monitor API key rotation system health
 
 ### 🤖 **AI-Powered Prompts**
 - **`datadog-metrics-analysis`** - Automated metrics analysis and insights
@@ -29,10 +141,13 @@ A production-ready MCP server that provides AI agents with intelligent access to
 - **`datadog://health-check/{service_name}`** - Comprehensive service health assessment
 
 ### ⚡ **Advanced Capabilities**
+- **🔄 Multi-Key Rotation**: Intelligent API key rotation with 5 different strategies  
 - **Flexible Time Ranges**: Support for minutes, hours, days, weeks, and months
 - **Intelligent Parameter Handling**: Smart defaults with comprehensive validation
 - **AI Agent Optimization**: Structured workflows for autonomous troubleshooting
 - **Production Ready**: Comprehensive error handling and logging
+- **Rate Limit Avoidance**: Proactive and reactive rate limit handling
+- **Circuit Breaker Protection**: Automatic failover for problematic keys
 
 ## 🚀 Quick Start
 
@@ -80,6 +195,18 @@ The server will start on `http://0.0.0.0:8080/mcp/`
 | `MCP_SERVER_HOST` | Server host | `0.0.0.0` | ❌ |
 | `MCP_SERVER_PORT` | Server port | `8080` | ❌ |
 
+#### 🔄 Key Rotation Configuration
+| Variable | Description | Default | Options |
+|----------|-------------|---------|---------|
+| `DD_API_KEY_2`, `DD_API_KEY_3`... | Additional API keys | - | ❌ |
+| `DD_APP_KEY_2`, `DD_APP_KEY_3`... | Additional APP keys | - | ❌ |
+| `DD_KEY_ROTATION_STRATEGY` | Rotation strategy | `adaptive` | `round_robin`, `lru`, `weighted`, `adaptive`, `random` |
+| `DD_CIRCUIT_BREAKER_THRESHOLD` | Failures before circuit breaker trips | `5` | Integer |
+| `DD_CIRCUIT_BREAKER_TIMEOUT` | Circuit breaker timeout (minutes) | `10` | Integer |
+| `DD_HEALTH_CHECK_INTERVAL` | Health check interval (seconds) | `300` | Integer |
+
+**📖 See [Key Rotation Guide](docs/KEY_ROTATION.md) for detailed configuration**
+
 #### Debug Configuration
 | Variable | Description | Default | Options |
 |----------|-------------|---------|---------|
@@ -120,11 +247,39 @@ Query timeseries metrics data from Datadog.
 
 **Examples:**
 ```json
+// Basic CPU usage over last 30 minutes
 {
   "name": "get_metrics",
   "arguments": {
     "query": "avg:system.cpu.user{*}",
     "minutes_back": 30
+  }
+}
+
+// Memory usage for specific service over last 2 hours
+{
+  "name": "get_metrics", 
+  "arguments": {
+    "query": "avg:system.mem.used{service:api-gateway}",
+    "hours_back": 2
+  }
+}
+
+// Request rate trends over last week
+{
+  "name": "get_metrics",
+  "arguments": {
+    "query": "sum:trace.http.request.hits{env:production}",
+    "hours_back": 168
+  }
+}
+
+// Error rate by service over last 24 hours
+{
+  "name": "get_metrics",
+  "arguments": {
+    "query": "sum:trace.http.request.errors{*} by {service}",
+    "hours_back": 24
   }
 }
 ```
@@ -146,6 +301,7 @@ Search Datadog logs with advanced filtering and pagination.
 
 **Examples:**
 ```json
+// Recent errors from API gateway (last 30 minutes)
 {
   "name": "get_logs", 
   "arguments": {
@@ -153,6 +309,49 @@ Search Datadog logs with advanced filtering and pagination.
     "minutes_back": 30,
     "limit": 50,
     "sort": "-timestamp"
+  }
+}
+
+// Deployment-related logs from last 2 hours
+{
+  "name": "get_logs",
+  "arguments": {
+    "query": "deploy OR release OR rollout",
+    "hours_back": 2,
+    "limit": 100
+  }
+}
+
+// Critical errors from specific time window
+{
+  "name": "get_logs",
+  "arguments": {
+    "query": "status:critical OR level:critical",
+    "from_time": "2025-09-24T10:00:00Z",
+    "to_time": "2025-09-24T12:00:00Z",
+    "limit": 200
+  }
+}
+
+// Authentication failures from security index
+{
+  "name": "get_logs",
+  "arguments": {
+    "query": "auth.failure OR unauthorized OR 403",
+    "hours_back": 24,
+    "indexes": ["security", "audit"],
+    "max_total_logs": 500
+  }
+}
+
+// Performance issues with pagination
+{
+  "name": "get_logs",
+  "arguments": {
+    "query": "slow OR timeout OR performance",
+    "hours_back": 6,
+    "limit": 100,
+    "max_total_logs": 1000
   }
 }
 ```
@@ -163,16 +362,83 @@ Get list of available metrics with optional filtering.
 **Parameters:**
 - `filter_query` (string, optional): Filter metrics by name pattern
 
+**Examples:**
+```json
+// List all available metrics
+{
+  "name": "list_metrics",
+  "arguments": {}
+}
+
+// Filter metrics for specific host
+{
+  "name": "list_metrics",
+  "arguments": {
+    "filter_query": "web-server-01"
+  }
+}
+
+// Filter by environment tag
+{
+  "name": "list_metrics",
+  "arguments": {
+    "filter_query": "env:production"
+  }
+}
+
+// Filter by service
+{
+  "name": "list_metrics",
+  "arguments": {
+    "filter_query": "service:api-gateway"
+  }
+}
+```
+
 #### `get_monitors`
 Get monitors data with state filtering.
 
 **Parameters:**
 - `group_states` (array, optional): Filter by states (e.g., ["Alert", "Warn"])
 
+**Examples:**
+```json
+// Get all monitors
+{
+  "name": "get_monitors",
+  "arguments": {}
+}
+
+// Get only alerting monitors
+{
+  "name": "get_monitors",
+  "arguments": {
+    "group_states": "alert"
+  }
+}
+
+// Get monitors in warning or alert state
+{
+  "name": "get_monitors", 
+  "arguments": {
+    "group_states": "alert,warn"
+  }
+}
+```
+
 #### `list_dashboards`
 Get list of available dashboards.
 
 **Parameters:** None
+
+**Examples:**
+```json
+// List all dashboards
+{
+  "name": "list_dashboards",
+  "arguments": {}
+}
+```
 
 #### `get_next_datadog_logs_page`
 Get next page of logs using cursor-based pagination.
@@ -181,10 +447,89 @@ Get next page of logs using cursor-based pagination.
 - `cursor` (string, required): Cursor from previous response
 - `limit` (integer, default: 100): Number of logs to retrieve
 
+**Examples:**
+```json
+// Continue pagination from previous search
+{
+  "name": "get_next_datadog_logs_page",
+  "arguments": {
+    "cursor": "eyJhZnRlciI6IjIwMjUtMDktMjRUMTU6MzA6MDBaIn0",
+    "limit": 100
+  }
+}
+
+// Get larger page size for batch processing
+{
+  "name": "get_next_datadog_logs_page",
+  "arguments": {
+    "cursor": "eyJhZnRlciI6IjIwMjUtMDktMjRUMTU6MzA6MDBaIn0",
+    "limit": 500
+  }
+}
+```
+
+#### `get_key_pool_status`
+Get detailed status of the API key rotation system for monitoring and debugging.
+
+**Parameters:** None
+
+**Examples:**
+```json
+// Monitor key rotation system health
+{
+  "name": "get_key_pool_status",
+  "arguments": {}
+}
+```
+
+**Response includes:**
+```json
+{
+  "status": "success", 
+  "total_keys": 3,
+  "available_keys": 2,
+  "rotation_strategy": "adaptive",
+  "keys": [
+    {
+      "id": "primary",
+      "health": "healthy", 
+      "success_rate": 0.95,
+      "total_requests": 150,
+      "consecutive_failures": 0,
+      "average_response_time": 0.245
+    }
+  ],
+  "recommendations": [
+    "ℹ️ 1 keys currently unavailable"
+  ]
+}
+```
+
 ### Prompts
 
 #### `datadog-metrics-analysis`
 Automated metrics analysis with AI insights.
+
+**Examples:**
+```json
+// Analyze CPU trends over last 24 hours
+{
+  "name": "datadog-metrics-analysis",
+  "arguments": {
+    "metric_query": "avg:system.cpu.user{env:production}",
+    "time_range_hours": "24"
+  }
+}
+
+// Analyze error rates with AI recommendations  
+{
+  "name": "datadog-metrics-analysis",
+  "arguments": {
+    "metric_query": "sum:trace.http.request.errors{*} by {service}",
+    "time_range_hours": "168"
+  }
+}
+```
 
 #### `datadog-performance-diagnosis`
 Structured performance troubleshooting workflow for AI agents.
@@ -193,6 +538,39 @@ Structured performance troubleshooting workflow for AI agents.
 - `service_name` (string): Name of the service to diagnose
 - `symptoms` (string): Observed performance symptoms
 - `severity` (string): Issue severity level
+
+**Examples:**
+```json
+// High response time investigation
+{
+  "name": "datadog-performance-diagnosis",
+  "arguments": {
+    "service_name": "api-gateway",
+    "symptoms": "Response times increased by 300% in last hour",
+    "severity": "high"
+  }
+}
+
+// Memory leak investigation
+{
+  "name": "datadog-performance-diagnosis", 
+  "arguments": {
+    "service_name": "payment-processor",
+    "symptoms": "Memory usage continuously increasing, occasional OOM errors",
+    "severity": "critical"
+  }
+}
+
+// Database performance issues
+{
+  "name": "datadog-performance-diagnosis",
+  "arguments": {
+    "service_name": "user-service",
+    "symptoms": "Slow database queries, connection pool exhaustion",
+    "severity": "medium"
+  }
+}
+```
 
 #### `datadog-incident-commander`
 AI-powered incident command and coordination workflow.
@@ -203,6 +581,42 @@ AI-powered incident command and coordination workflow.
 - `symptoms` (string): Observed incident symptoms
 - `estimated_user_impact` (string): Estimated user impact percentage
 
+**Examples:**
+```json
+// Critical multi-service outage
+{
+  "name": "datadog-incident-commander",
+  "arguments": {
+    "severity": "critical",
+    "affected_services": "api-gateway, payment-service, user-authentication",
+    "symptoms": "Complete service outage, 100% error rate, users cannot login",
+    "estimated_user_impact": "85%"
+  }
+}
+
+// High severity database issue
+{
+  "name": "datadog-incident-commander",
+  "arguments": {
+    "severity": "high", 
+    "affected_services": "database-cluster, reporting-service",
+    "symptoms": "Database connection timeouts, slow query performance",
+    "estimated_user_impact": "25%"
+  }
+}
+
+// Deployment-related incident
+{
+  "name": "datadog-incident-commander",
+  "arguments": {
+    "severity": "medium",
+    "affected_services": "api-gateway",
+    "symptoms": "Increased error rate after deployment, partial functionality affected",
+    "estimated_user_impact": "15%"
+  }
+}
+```
+
 #### `datadog-time-range-advisor`
 Smart time range selection guidance for different analysis types.
 
@@ -211,16 +625,128 @@ Smart time range selection guidance for different analysis types.
 - `suspected_timeframe` (string): When issue might have started
 - `incident_impact` (string): Impact level
 
+**Examples:**
+```json
+// Performance analysis guidance
+{
+  "name": "datadog-time-range-advisor",
+  "arguments": {
+    "analysis_type": "performance",
+    "suspected_timeframe": "recent",
+    "incident_impact": "high"
+  }
+}
+
+// Security investigation guidance
+{
+  "name": "datadog-time-range-advisor",
+  "arguments": {
+    "analysis_type": "security", 
+    "suspected_timeframe": "hours",
+    "incident_impact": "critical"
+  }
+}
+
+// Capacity planning guidance
+{
+  "name": "datadog-time-range-advisor",
+  "arguments": {
+    "analysis_type": "capacity",
+    "suspected_timeframe": "weeks",
+    "incident_impact": "medium"
+  }
+}
+
+// Deployment verification guidance
+{
+  "name": "datadog-time-range-advisor",
+  "arguments": {
+    "analysis_type": "deployment",
+    "suspected_timeframe": "recent",
+    "incident_impact": "low"
+  }
+}
+```
+
 ### Resources
 
 #### `datadog://metrics/{query}`
 Real-time metrics data with AI analysis and insights.
 
+**Examples:**
+```json
+// Get CPU metrics with analysis
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://metrics/avg:system.cpu.user{env:production}"
+  }
+}
+
+// Get request rate trends
+{
+  "jsonrpc": "2.0", 
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://metrics/sum:trace.http.request.hits{service:api-gateway}"
+  }
+}
+```
+
 #### `datadog://logs/{query}`
 Intelligent log search with formatted results and metadata.
 
+**Examples:**
+```json
+// Get recent errors with context
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read", 
+  "params": {
+    "uri": "datadog://logs/service:api-gateway status:error"
+  }
+}
+
+// Get deployment-related logs
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://logs/deploy OR release OR rollout"
+  }
+}
+```
+
 #### `datadog://logs-detailed/{query}`
 Enhanced log analysis with full context and detailed breakdown.
+
+**Examples:**
+```json
+// Detailed error analysis
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://logs-detailed/status:500 OR status:502 OR status:503"
+  }
+}
+
+// Security incident analysis
+{
+  "jsonrpc": "2.0",
+  "id": 1, 
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://logs-detailed/auth.failure OR unauthorized OR 403"
+  }
+}
+```
 
 #### `datadog://health-check/{service_name}`
 Comprehensive service health assessment with:
@@ -229,6 +755,39 @@ Comprehensive service health assessment with:
 - Error rate evaluation
 - AI-generated recommendations
 - Business impact translation
+
+**Examples:**
+```json
+// API Gateway health assessment
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://health-check/api-gateway"
+  }
+}
+
+// Database service health check
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read", 
+  "params": {
+    "uri": "datadog://health-check/database-primary"
+  }
+}
+
+// Payment service comprehensive analysis
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "resources/read",
+  "params": {
+    "uri": "datadog://health-check/payment-processor"
+  }
+}
+```
 
 ## ⏰ Time Range Examples
 
@@ -491,6 +1050,74 @@ python3 datadog_mcp_server.py
 2. Limit log search results with `limit` parameter
 3. Use `minutes_back` for precise short-term analysis
 4. Consider pagination for large datasets
+
+### Performance Optimization
+
+#### Query Optimization Strategies
+```bash
+# ✅ Efficient queries (fast responses)
+get_logs("service:api status:error", minutes_back=15, limit=50)
+get_metrics("avg:response.time{service:api}", hours_back=1)
+
+# ❌ Inefficient queries (slow responses)  
+get_logs("*", hours_back=168, limit=10000)  # Too broad, too much data
+get_metrics("*", hours_back=720)            # Wildcard with long range
+```
+
+#### Memory and Network Optimization
+```python
+# Use pagination for large datasets
+page_1 = get_logs("service:api", hours_back=24, limit=100)
+if page_1.get("has_more"):
+    page_2 = get_next_datadog_logs_page(page_1["next_cursor"], limit=100)
+
+# Batch related queries efficiently
+metrics_queries = [
+    ("cpu", "avg:system.cpu.user{service:api}"),
+    ("memory", "avg:system.mem.used{service:api}"),
+    ("requests", "sum:trace.http.request.hits{service:api}")
+]
+```
+
+#### Time Range Selection Best Practices
+```python
+# Match time range to use case
+Real-time troubleshooting:    minutes_back=15-30
+Recent issue investigation:   hours_back=1-6  
+Trend analysis:              hours_back=24-168
+Capacity planning:           hours_back=720-2160
+
+# Use specific ranges instead of defaults
+get_logs("deploy", hours_back=2)     # ✅ Specific to deployment window
+get_logs("deploy")                   # ❌ Uses default 1 hour
+```
+
+#### Caching and Rate Limiting
+```python
+# Implement client-side caching for repeated queries
+cache_key = f"metrics:{query}:{hours_back}"
+if cache_key not in cache or cache_expired(cache_key):
+    result = get_metrics(query, hours_back=hours_back)
+    cache[cache_key] = result
+
+# Respect API rate limits with exponential backoff
+import time
+def get_metrics_with_retry(query, hours_back, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            return get_metrics(query, hours_back=hours_back)
+        except RateLimitError:
+            time.sleep(2 ** attempt)  # Exponential backoff
+```
+
+#### Resource Usage Guidelines
+| Query Type | Recommended Limit | Max Time Range | Expected Response |
+|------------|-------------------|----------------|-------------------|
+| Real-time logs | 50-100 | 15-30 minutes | < 2 seconds |
+| Historical logs | 100-500 | 1-24 hours | 2-10 seconds |
+| Metrics (single) | N/A | 1-168 hours | < 5 seconds |
+| Metrics (multiple) | 5-10 queries | 1-24 hours | 5-30 seconds |
+| Health checks | N/A | 1-2 hours | < 10 seconds |
 
 #### Debug and Tracing
 For troubleshooting MCP communication and API issues:
