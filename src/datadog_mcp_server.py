@@ -248,6 +248,19 @@ class DatadogMCPServer:
         # Start health monitoring
         self.key_pool.start_health_monitoring()
         
+        # Initialize API clients using the primary key
+        primary_key = self.key_pool.get_key_by_strategy()
+        if primary_key:
+            api_client = self._get_api_client(primary_key)
+            self.metrics_api = MetricsApi(api_client)
+            self.logs_api = LogsApi(api_client)
+            self.monitors_api = MonitorsApi(api_client)
+            self.dashboards_api = DashboardsApi(api_client)
+            self.hosts_api = HostsApi(api_client)
+            # V2 APIs
+            self.logs_api_v2 = LogsApiV2(api_client)
+            self.spans_api = SpansApi(api_client)
+        
     def _get_api_client(self, key_pair: KeyPair) -> ApiClient:
         """Get or create API client for a specific key pair"""
         cache_key = f"{key_pair.id}_{key_pair.api_key[:8]}"
