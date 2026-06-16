@@ -130,7 +130,7 @@ class TestEnvironmentLoading(unittest.TestCase):
             self.assertEqual(keys[0].id, "primary")
             self.assertEqual(keys[0].api_key, "test_api_key")
             self.assertEqual(keys[0].app_key, "test_app_key")
-            self.assertEqual(keys[0].site, "datadoghq.com")
+            self.assertEqual(keys[0].site, "us3.datadoghq.com")
     
     def test_multiple_key_loading(self):
         """Test loading multiple keys from environment"""
