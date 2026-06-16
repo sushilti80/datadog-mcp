@@ -959,32 +959,38 @@ def get_datadog_credentials():
         
         return key_pool, site
 
+datadog_config = None
+datadog_server = None
+_initialization_error = None
+
 try:
     key_pool, primary_site = get_datadog_credentials()
-    
+
     datadog_config = DatadogConfig(
         key_pool=key_pool,
         primary_site=primary_site
     )
-    
+
     # Log key pool status
     pool_status = key_pool.get_pool_status()
     debug_log(DebugLevel.INFO, "Datadog Key Pool Initialized", {
         "total_keys": pool_status["total_keys"],
-        "available_keys": pool_status["available_keys"], 
+        "available_keys": pool_status["available_keys"],
         "rotation_strategy": pool_status["rotation_strategy"],
         "primary_site": primary_site
     })
-    
+
     if pool_status["total_keys"] == 0:
         logger.error("No valid Datadog API keys available")
-        exit(1)
-        
+        _initialization_error = "No valid Datadog API keys available"
+        datadog_config = None
+
 except Exception as e:
     logger.error(f"Failed to initialize Datadog configuration: {e}")
-    exit(1)
+    _initialization_error = str(e)
 
-datadog_server = DatadogMCPServer(datadog_config)
+if datadog_config is not None:
+    datadog_server = DatadogMCPServer(datadog_config)
 
 # Add a simple health check tool for debugging
 @mcp.tool
@@ -2111,10 +2117,14 @@ Based on your **{analysis_type}** analysis with **{suspected_timeframe}** timefr
 # For debugging, you can add logging directly within tool functions
 
 if __name__ == "__main__":
+    if datadog_server is None:
+        logger.error(f"Cannot start server: {_initialization_error}")
+        exit(1)
+
     # Configure server to use HTTP transport with SSE support
     host = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("MCP_SERVER_PORT", "8080"))
-    
+
     logger.info(f"Starting Datadog MCP Server on {host}:{port}")
     logger.info("Transport: HTTP Streamable with SSE support")
     logger.info(f"Datadog Site: {datadog_config.primary_site}")
