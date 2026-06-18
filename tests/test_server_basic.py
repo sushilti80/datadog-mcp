@@ -30,14 +30,13 @@ def test_server_import():
 def test_datadog_config():
     """Test DatadogConfig creation"""
     from datadog_mcp_server import DatadogConfig
+    from key_rotation import KeyPoolManager
 
-    config = DatadogConfig(
-        api_key="test_api_key", app_key="test_app_key", site="datadoghq.com"
-    )
+    key_pool = KeyPoolManager()
+    config = DatadogConfig(key_pool=key_pool, primary_site="us3.datadoghq.com")
 
-    assert config.api_key == "test_api_key"
-    assert config.app_key == "test_app_key"
-    assert config.site == "datadoghq.com"
+    assert config.key_pool is key_pool
+    assert config.primary_site == "us3.datadoghq.com"
 
 
 def test_server_tools_available():
@@ -53,7 +52,7 @@ def test_server_tools_available():
 
     # The tools should be registered with FastMCP
     # We can't easily test the internal structure, but we can verify the module loaded
-    assert mcp_instance.name == "Enhanced Datadog MCP Server"
+    assert mcp_instance.name == "Datadog MCP Server"
 
 
 def test_required_tools_defined():
