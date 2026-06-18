@@ -16,7 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
 COPY src/ ./src/
-COPY .env .env
 
 # Create non-root user for security
 RUN useradd -m -u 1000 mcpuser && chown -R mcpuser:mcpuser /app
@@ -31,4 +30,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run the server
 CMD ["python", "src/datadog_mcp_server.py"]
-
