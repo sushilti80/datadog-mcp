@@ -32,21 +32,29 @@ from datadog_api_client.v1.api.dashboards_api import DashboardsApi
 
 # Import key rotation system
 from key_rotation import (
-    KeyPair, KeyPoolManager, KeyHealth, RotationStrategy,
-    load_keys_from_environment, get_rotation_config, 
-    create_retry_decorator, detect_rate_limit_error
+    KeyPair,
+    KeyPoolManager,
+    KeyHealth,
+    RotationStrategy,
+    load_keys_from_environment,
+    get_rotation_config,
+    create_retry_decorator,
+    detect_rate_limit_error,
 )
+
 
 # Debug Configuration System
 class DebugLevel(Enum):
     NONE = "NONE"
-    INFO = "INFO" 
+    INFO = "INFO"
     DEBUG = "DEBUG"
     TRACE = "TRACE"
+
 
 @dataclass
 class DebugConfig:
     """Configuration for debug tracing and logging"""
+
     level: DebugLevel = DebugLevel.INFO
     log_requests: bool = False
     log_responses: bool = False
@@ -55,45 +63,51 @@ class DebugConfig:
     log_parameters: bool = False
     log_errors: bool = True
     mask_sensitive_data: bool = True
-    
+
     @classmethod
-    def from_env(cls) -> 'DebugConfig':
+    def from_env(cls) -> "DebugConfig":
         """Create debug config from environment variables"""
-        level_str = os.getenv('MCP_DEBUG_LEVEL', 'INFO').upper()
+        level_str = os.getenv("MCP_DEBUG_LEVEL", "INFO").upper()
         try:
             level = DebugLevel(level_str)
         except ValueError:
             level = DebugLevel.INFO
-            
+
         return cls(
             level=level,
-            log_requests=os.getenv('MCP_DEBUG_REQUESTS', 'false').lower() == 'true',
-            log_responses=os.getenv('MCP_DEBUG_RESPONSES', 'false').lower() == 'true', 
-            log_timing=os.getenv('MCP_DEBUG_TIMING', 'false').lower() == 'true',
-            pretty_print=os.getenv('MCP_DEBUG_PRETTY_PRINT', 'true').lower() == 'true',
-            log_parameters=os.getenv('MCP_DEBUG_PARAMETERS', 'false').lower() == 'true',
-            log_errors=os.getenv('MCP_DEBUG_ERRORS', 'true').lower() == 'true',
-            mask_sensitive_data=os.getenv('MCP_DEBUG_MASK_SENSITIVE', 'true').lower() == 'true'
+            log_requests=os.getenv("MCP_DEBUG_REQUESTS", "false").lower() == "true",
+            log_responses=os.getenv("MCP_DEBUG_RESPONSES", "false").lower() == "true",
+            log_timing=os.getenv("MCP_DEBUG_TIMING", "false").lower() == "true",
+            pretty_print=os.getenv("MCP_DEBUG_PRETTY_PRINT", "true").lower() == "true",
+            log_parameters=os.getenv("MCP_DEBUG_PARAMETERS", "false").lower() == "true",
+            log_errors=os.getenv("MCP_DEBUG_ERRORS", "true").lower() == "true",
+            mask_sensitive_data=os.getenv("MCP_DEBUG_MASK_SENSITIVE", "true").lower()
+            == "true",
         )
-    
+
     def should_log_at_level(self, check_level: DebugLevel) -> bool:
         """Check if we should log at the specified level"""
         levels = [DebugLevel.NONE, DebugLevel.INFO, DebugLevel.DEBUG, DebugLevel.TRACE]
         return levels.index(self.level) >= levels.index(check_level)
 
+
 # Global debug configuration
 debug_config = DebugConfig.from_env()
+
 
 # Debug Utility Functions
 def mask_sensitive_data(data: Any) -> Any:
     """Mask sensitive data in debug logs"""
     if not debug_config.mask_sensitive_data:
         return data
-        
+
     if isinstance(data, dict):
         masked = {}
         for key, value in data.items():
-            if any(sensitive in key.lower() for sensitive in ['key', 'secret', 'token', 'password']):
+            if any(
+                sensitive in key.lower()
+                for sensitive in ["key", "secret", "token", "password"]
+            ):
                 masked[key] = "***MASKED***"
             else:
                 masked[key] = mask_sensitive_data(value)
@@ -103,6 +117,7 @@ def mask_sensitive_data(data: Any) -> Any:
     else:
         return data
 
+
 def format_debug_data(data: Any, pretty: bool = True) -> str:
     """Format data for debug logging"""
     masked_data = mask_sensitive_data(data)
@@ -111,18 +126,21 @@ def format_debug_data(data: Any, pretty: bool = True) -> str:
     else:
         return json.dumps(masked_data, default=str)
 
-def debug_log(level: DebugLevel, message: str, data: Any = None, correlation_id: str = None):
+
+def debug_log(
+    level: DebugLevel, message: str, data: Any = None, correlation_id: str = None
+):
     """Enhanced debug logging with correlation tracking"""
     if not debug_config.should_log_at_level(level):
         return
-        
+
     log_message = message
     if correlation_id:
         log_message = f"[{correlation_id}] {message}"
-        
+
     if data is not None:
         log_message += f"\nData: {format_debug_data(data)}"
-    
+
     # Use appropriate logging level
     if level == DebugLevel.TRACE:
         logger.debug(f"TRACE: {log_message}")
@@ -131,50 +149,79 @@ def debug_log(level: DebugLevel, message: str, data: Any = None, correlation_id:
     elif level == DebugLevel.INFO:
         logger.info(f"DEBUG: {log_message}")
 
+
 def mcp_debug_decorator(tool_name: str):
     """Decorator to add debug tracing to MCP tools"""
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             correlation_id = str(uuid.uuid4())[:8]
             start_time = time.time()
-            
+
             # Log incoming request
             if debug_config.log_requests:
-                debug_log(DebugLevel.DEBUG, f"MCP Tool Call: {tool_name}", {
-                    "args": args,
-                    "kwargs": kwargs if debug_config.log_parameters else "***HIDDEN***"
-                }, correlation_id)
-            
+                debug_log(
+                    DebugLevel.DEBUG,
+                    f"MCP Tool Call: {tool_name}",
+                    {
+                        "args": args,
+                        "kwargs": (
+                            kwargs if debug_config.log_parameters else "***HIDDEN***"
+                        ),
+                    },
+                    correlation_id,
+                )
+
             try:
                 # Execute the function
                 result = func(*args, **kwargs)
                 execution_time = time.time() - start_time
-                
+
                 # Log successful response
                 if debug_config.log_responses:
-                    debug_log(DebugLevel.DEBUG, f"MCP Tool Success: {tool_name}", {
-                        "result": result,
-                        "execution_time_ms": round(execution_time * 1000, 2)
-                    } if debug_config.log_timing else {"result": result}, correlation_id)
-                
+                    debug_log(
+                        DebugLevel.DEBUG,
+                        f"MCP Tool Success: {tool_name}",
+                        (
+                            {
+                                "result": result,
+                                "execution_time_ms": round(execution_time * 1000, 2),
+                            }
+                            if debug_config.log_timing
+                            else {"result": result}
+                        ),
+                        correlation_id,
+                    )
+
                 return result
-                
+
             except Exception as e:
                 execution_time = time.time() - start_time
-                
+
                 # Log error response
                 if debug_config.log_errors:
-                    debug_log(DebugLevel.INFO, f"MCP Tool Error: {tool_name}", {
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                        "execution_time_ms": round(execution_time * 1000, 2) if debug_config.log_timing else None
-                    }, correlation_id)
-                
+                    debug_log(
+                        DebugLevel.INFO,
+                        f"MCP Tool Error: {tool_name}",
+                        {
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                            "execution_time_ms": (
+                                round(execution_time * 1000, 2)
+                                if debug_config.log_timing
+                                else None
+                            ),
+                        },
+                        correlation_id,
+                    )
+
                 raise
-                
+
         return wrapper
+
     return decorator
+
 
 from datadog_api_client.v1.api.hosts_api import HostsApi
 from datadog_api_client.v1.model.metrics_query_response import MetricsQueryResponse
@@ -183,12 +230,15 @@ from datadog_api_client.v1.model.logs_sort import LogsSort
 from datadog_api_client.v2.api.logs_api import LogsApi as LogsApiV2
 from datadog_api_client.v2.api.spans_api import SpansApi
 from datadog_api_client.v2.api.incidents_api import IncidentsApi
-from datadog_api_client.v2.model.logs_list_request import LogsListRequest as LogsListRequestV2
+from datadog_api_client.v2.model.logs_list_request import (
+    LogsListRequest as LogsListRequestV2,
+)
 from datadog_api_client.v2.model.logs_sort import LogsSort as LogsSortV2
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
 
 # Configure logging with debug support
 def setup_logging():
@@ -202,106 +252,124 @@ def setup_logging():
         level = logging.INFO
     else:  # NONE
         level = logging.WARNING
-    
+
     # Configure root logger
     logging.basicConfig(
         level=level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    
+
     # Configure specific loggers based on debug settings
     if debug_config.should_log_at_level(DebugLevel.TRACE):
         logging.getLogger("uvicorn").setLevel(logging.DEBUG)
         logging.getLogger("fastmcp").setLevel(logging.DEBUG)
         logging.getLogger("datadog_api_client").setLevel(logging.DEBUG)
-    
+
     return logging.getLogger(__name__)
+
 
 logger = setup_logging()
 
 # Log the debug configuration on startup
-debug_log(DebugLevel.INFO, "Debug Configuration Loaded", {
-    "level": debug_config.level.value,
-    "log_requests": debug_config.log_requests,
-    "log_responses": debug_config.log_responses,
-    "log_timing": debug_config.log_timing,
-    "pretty_print": debug_config.pretty_print
-})
+debug_log(
+    DebugLevel.INFO,
+    "Debug Configuration Loaded",
+    {
+        "level": debug_config.level.value,
+        "log_requests": debug_config.log_requests,
+        "log_responses": debug_config.log_responses,
+        "log_timing": debug_config.log_timing,
+        "pretty_print": debug_config.pretty_print,
+    },
+)
+
 
 @dataclass
 class DatadogConfig:
     """Configuration for Datadog API client with key rotation support"""
+
     key_pool: KeyPoolManager
     primary_site: str = "datadoghq.com"
 
+
 class DatadogMCPServer:
     """Datadog MCP Server implementation with intelligent key rotation"""
-    
+
     def __init__(self, config: DatadogConfig):
         self.config = config
         self.key_pool = config.key_pool
-        
+
         # Create API clients - these will be recreated per request with different keys
         self._api_client_cache = {}
-        
+
         # Start health monitoring
         self.key_pool.start_health_monitoring()
-        
+
     def _get_api_client(self, key_pair: KeyPair) -> ApiClient:
         """Get or create API client for a specific key pair"""
         cache_key = f"{key_pair.id}_{key_pair.api_key[:8]}"
-        
+
         if cache_key not in self._api_client_cache:
             configuration = Configuration()
             configuration.api_key["apiKeyAuth"] = key_pair.api_key
             configuration.api_key["appKeyAuth"] = key_pair.app_key
             configuration.server_variables["site"] = key_pair.site
-            
+
             self._api_client_cache[cache_key] = ApiClient(configuration)
-            debug_log(DebugLevel.DEBUG, f"Created API client for key {key_pair.id}", {
-                "site": key_pair.site,
-                "cache_key": cache_key
-            })
-        
+            debug_log(
+                DebugLevel.DEBUG,
+                f"Created API client for key {key_pair.id}",
+                {"site": key_pair.site, "cache_key": cache_key},
+            )
+
         return self._api_client_cache[cache_key]
-    
+
     def _execute_with_key_rotation(self, operation_name: str, operation_func):
         """
         Execute an operation with automatic key rotation on rate limits
-        
+
         Args:
             operation_name: Name of the operation for logging
             operation_func: Function that takes (key_pair, api_client) and executes the API call
         """
-        @create_retry_decorator(self.key_pool, max_retries=min(3, len(self.key_pool.keys)))
+
+        @create_retry_decorator(
+            self.key_pool, max_retries=min(3, len(self.key_pool.keys))
+        )
         def _wrapped_operation(key_pair: KeyPair, *args, **kwargs):
             api_client = self._get_api_client(key_pair)
-            
-            debug_log(DebugLevel.DEBUG, f"Executing {operation_name} with key {key_pair.id}")
-            
+
+            debug_log(
+                DebugLevel.DEBUG, f"Executing {operation_name} with key {key_pair.id}"
+            )
+
             try:
                 result = operation_func(key_pair, api_client, *args, **kwargs)
-                debug_log(DebugLevel.TRACE, f"{operation_name} successful with key {key_pair.id}")
+                debug_log(
+                    DebugLevel.TRACE,
+                    f"{operation_name} successful with key {key_pair.id}",
+                )
                 return result
             except Exception as e:
-                debug_log(DebugLevel.INFO, f"{operation_name} failed with key {key_pair.id}", {
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                })
+                debug_log(
+                    DebugLevel.INFO,
+                    f"{operation_name} failed with key {key_pair.id}",
+                    {"error": str(e), "error_type": type(e).__name__},
+                )
                 raise
-        
+
         return _wrapped_operation()
-    
+
     def query_metrics(self, query: str, from_time: int, to_time: int) -> Dict[str, Any]:
         """
         Query Datadog metrics with comprehensive error handling and key rotation
-        
+
         Args:
             query: Datadog metrics query string
             from_time: Start time as Unix timestamp (seconds)
             to_time: End time as Unix timestamp (seconds)
-            
+
         Returns:
             Dictionary with query results or error information
         """
@@ -311,52 +379,52 @@ class DatadogMCPServer:
                 return {
                     "status": "error",
                     "error": "Query cannot be empty",
-                    "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'"
+                    "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'",
                 }
-            
+
             if from_time >= to_time:
                 return {
-                    "status": "error", 
+                    "status": "error",
                     "error": f"Invalid time range: from_time ({from_time}) must be less than to_time ({to_time})",
-                    "suggestion": "Ensure from_time is earlier than to_time"
+                    "suggestion": "Ensure from_time is earlier than to_time",
                 }
-            
+
             # Check if time range is reasonable (not too far in the past or future)
             current_time = int(datetime.now(timezone.utc).timestamp())
             if to_time > current_time + 3600:  # Allow 1 hour in future for clock skew
                 return {
                     "status": "error",
                     "error": f"to_time ({to_time}) cannot be more than 1 hour in the future",
-                    "suggestion": "Use current or past timestamps"
+                    "suggestion": "Use current or past timestamps",
                 }
-            
+
             # Check if time range is too large (more than 1 year)
             if (to_time - from_time) > 365 * 24 * 3600:
                 return {
                     "status": "error",
                     "error": "Time range cannot exceed 1 year",
-                    "suggestion": "Use a smaller time range for better performance"
+                    "suggestion": "Use a smaller time range for better performance",
                 }
-            
+
             logger.info(f"Querying metrics: {query} from {from_time} to {to_time}")
-            
+
             # Execute with key rotation
             def _query_operation(key_pair: KeyPair, api_client: ApiClient):
                 metrics_api = MetricsApi(api_client)
                 return metrics_api.query_metrics(
-                    _from=from_time,
-                    to=to_time,
-                    query=query
+                    _from=from_time, to=to_time, query=query
                 )
-            
-            response = self._execute_with_key_rotation("query_metrics", _query_operation)
-            
+
+            response = self._execute_with_key_rotation(
+                "query_metrics", _query_operation
+            )
+
             # Enhanced response processing
             series_data = []
-            if hasattr(response, 'series') and response.series:
+            if hasattr(response, "series") and response.series:
                 series_data = response.series
                 logger.info(f"Retrieved {len(series_data)} time series")
-            
+
             result = {
                 "status": "success",
                 "query": query,
@@ -365,23 +433,27 @@ class DatadogMCPServer:
                 "duration_hours": round((to_time - from_time) / 3600, 2),
                 "series_count": len(series_data),
                 "series": series_data,
-                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
+                "key_pool_status": (
+                    self.key_pool.get_pool_status()
+                    if debug_config.should_log_at_level(DebugLevel.DEBUG)
+                    else None
+                ),
             }
-            
+
             # Add helpful metadata
-            if hasattr(response, 'from_date'):
+            if hasattr(response, "from_date"):
                 result["response_from_date"] = response.from_date
-            if hasattr(response, 'to_date'):
+            if hasattr(response, "to_date"):
                 result["response_to_date"] = response.to_date
-            if hasattr(response, 'group_by'):
+            if hasattr(response, "group_by"):
                 result["group_by"] = response.group_by
-            
+
             return result
-            
+
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Error querying metrics '{query}': {error_msg}")
-            
+
             # Enhanced error categorization
             if "403" in error_msg or "Forbidden" in error_msg:
                 suggestion = "Check API key permissions. Ensure 'metrics_read' permission is granted."
@@ -390,12 +462,14 @@ class DatadogMCPServer:
             elif "400" in error_msg or "Bad Request" in error_msg:
                 suggestion = "Check query syntax. Example: 'avg:system.cpu.user{*}'"
             elif "timeout" in error_msg.lower():
-                suggestion = "Query timeout. Try reducing time range or simplifying query."
+                suggestion = (
+                    "Query timeout. Try reducing time range or simplifying query."
+                )
             elif "rate limit" in error_msg.lower():
                 suggestion = "API rate limit exceeded. Key rotation should handle this automatically."
             else:
                 suggestion = "Check network connectivity and Datadog service status."
-            
+
             return {
                 "status": "error",
                 "error": error_msg,
@@ -403,23 +477,27 @@ class DatadogMCPServer:
                 "suggestion": suggestion,
                 "from_time": from_time,
                 "to_time": to_time,
-                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
+                "key_pool_status": (
+                    self.key_pool.get_pool_status()
+                    if debug_config.should_log_at_level(DebugLevel.DEBUG)
+                    else None
+                ),
             }
-    
+
     def search_logs(
-        self, 
-        query: str, 
-        limit: int = 100, 
+        self,
+        query: str,
+        limit: int = 100,
         from_time: Optional[str] = None,
         to_time: Optional[str] = None,
         indexes: Optional[List[str]] = None,
         sort: str = "timestamp",
         cursor: Optional[str] = None,
-        max_total_logs: Optional[int] = None
+        max_total_logs: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Search Datadog logs with enhanced flexibility, pagination support, and key rotation.
-        
+
         Args:
             query: Log search query (e.g., "service:web-app ERROR")
             limit: Number of logs per page (max 1000, default: 100)
@@ -433,106 +511,148 @@ class DatadogMCPServer:
         try:
             # Set default time range if not provided
             if from_time is None:
-                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
             if to_time is None:
-                to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-            
+                to_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
             # Validate and adjust limit (Datadog API max is 1000 per request)
             page_limit = min(limit, 1000)
-            
+
             # Set maximum total logs to retrieve
             if max_total_logs is None:
                 max_total_logs = limit
-            
+
             # Execute with key rotation
             def _search_logs_operation(key_pair: KeyPair, api_client: ApiClient):
                 logs_api_v2 = LogsApiV2(api_client)
-                
+
                 # Prepare filter
-                log_filter = {
-                    "query": query,
-                    "from": from_time,
-                    "to": to_time
-                }
-                
+                log_filter = {"query": query, "from": from_time, "to": to_time}
+
                 if indexes:
                     log_filter["indexes"] = indexes
-                
+
                 # Prepare page parameters
                 page_params = {"limit": page_limit}
                 if cursor:
                     page_params["cursor"] = cursor
-                
+
                 # Convert sort parameter to enum
-                sort_order = LogsSortV2.TIMESTAMP_DESCENDING if sort == "-timestamp" else LogsSortV2.TIMESTAMP_ASCENDING
-                
-                body = LogsListRequestV2(
-                    filter=log_filter,
-                    sort=sort_order,
-                    page=page_params
+                sort_order = (
+                    LogsSortV2.TIMESTAMP_DESCENDING
+                    if sort == "-timestamp"
+                    else LogsSortV2.TIMESTAMP_ASCENDING
                 )
-                
+
+                body = LogsListRequestV2(
+                    filter=log_filter, sort=sort_order, page=page_params
+                )
+
                 all_logs = []
                 next_cursor = None
                 total_retrieved = 0
-                
+
                 # Pagination loop to retrieve more logs if needed
                 while total_retrieved < max_total_logs:
                     # Update cursor for subsequent requests
                     if next_cursor:
                         body.page["cursor"] = next_cursor
-                    
+
                     # Adjust limit for final page
                     remaining = max_total_logs - total_retrieved
                     if remaining < page_limit:
                         body.page["limit"] = remaining
-                    
+
                     response = logs_api_v2.list_logs(body=body)
-                    
+
                     # Process logs from this page
                     page_logs = []
-                    if hasattr(response, 'data') and response.data:
+                    if hasattr(response, "data") and response.data:
                         for log in response.data:
                             log_entry = {
-                                "id": getattr(log, 'id', ''),
-                                "timestamp": getattr(log.attributes, 'timestamp', '') if hasattr(log, 'attributes') else '',
-                                "message": getattr(log.attributes, 'message', '') if hasattr(log, 'attributes') else '',
-                                "service": getattr(log.attributes, 'service', '') if hasattr(log, 'attributes') else '',
-                                "status": getattr(log.attributes, 'status', '') if hasattr(log, 'attributes') else '',
-                                "tags": getattr(log.attributes, 'tags', []) if hasattr(log, 'attributes') else [],
-                                "host": getattr(log.attributes, 'host', '') if hasattr(log, 'attributes') else '',
-                                "source": getattr(log.attributes, 'ddsource', '') if hasattr(log, 'attributes') else ''
+                                "id": getattr(log, "id", ""),
+                                "timestamp": (
+                                    getattr(log.attributes, "timestamp", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
+                                "message": (
+                                    getattr(log.attributes, "message", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
+                                "service": (
+                                    getattr(log.attributes, "service", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
+                                "status": (
+                                    getattr(log.attributes, "status", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
+                                "tags": (
+                                    getattr(log.attributes, "tags", [])
+                                    if hasattr(log, "attributes")
+                                    else []
+                                ),
+                                "host": (
+                                    getattr(log.attributes, "host", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
+                                "source": (
+                                    getattr(log.attributes, "ddsource", "")
+                                    if hasattr(log, "attributes")
+                                    else ""
+                                ),
                             }
-                            
+
                             # Add custom attributes if they exist
-                            if hasattr(log, 'attributes') and hasattr(log.attributes, 'attributes'):
-                                log_entry["custom_attributes"] = log.attributes.attributes
-                            
+                            if hasattr(log, "attributes") and hasattr(
+                                log.attributes, "attributes"
+                            ):
+                                log_entry["custom_attributes"] = (
+                                    log.attributes.attributes
+                                )
+
                             page_logs.append(log_entry)
                             total_retrieved += 1
-                            
+
                             if total_retrieved >= max_total_logs:
                                 break
-                    
+
                     all_logs.extend(page_logs)
-                    
+
                     # Check if there are more pages
-                    if hasattr(response, 'links') and hasattr(response.links, 'next') and response.links.next:
+                    if (
+                        hasattr(response, "links")
+                        and hasattr(response.links, "next")
+                        and response.links.next
+                    ):
                         # Extract cursor from next link if available
-                        next_cursor = getattr(response.meta, 'page', {}).get('after') if hasattr(response, 'meta') else None
+                        next_cursor = (
+                            getattr(response.meta, "page", {}).get("after")
+                            if hasattr(response, "meta")
+                            else None
+                        )
                         if not next_cursor:
                             break
                     else:
                         break
-                    
+
                     # If we got fewer logs than requested, we've reached the end
                     if len(page_logs) < body.page["limit"]:
                         break
-                
+
                 return all_logs, next_cursor, total_retrieved
-            
-            all_logs, next_cursor, total_retrieved = self._execute_with_key_rotation("search_logs", _search_logs_operation)
-            
+
+            all_logs, next_cursor, total_retrieved = self._execute_with_key_rotation(
+                "search_logs", _search_logs_operation
+            )
+
             # Prepare response with pagination info
             result = {
                 "status": "success",
@@ -544,359 +664,435 @@ class DatadogMCPServer:
                 "to_time": to_time,
                 "sort": sort,
                 "indexes_searched": indexes or ["all"],
-                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
+                "key_pool_status": (
+                    self.key_pool.get_pool_status()
+                    if debug_config.should_log_at_level(DebugLevel.DEBUG)
+                    else None
+                ),
             }
-            
+
             # Add pagination cursor if available for next request
             if next_cursor and total_retrieved >= max_total_logs:
                 result["next_cursor"] = next_cursor
                 result["has_more"] = True
             else:
                 result["has_more"] = False
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"Error searching logs: {e}")
             return {
                 "status": "error",
                 "error": str(e),
                 "query": query,
-                "from_time": from_time if 'from_time' in locals() else None,
-                "to_time": to_time if 'to_time' in locals() else None,
-                "key_pool_status": self.key_pool.get_pool_status() if debug_config.should_log_at_level(DebugLevel.DEBUG) else None
+                "from_time": from_time if "from_time" in locals() else None,
+                "to_time": to_time if "to_time" in locals() else None,
+                "key_pool_status": (
+                    self.key_pool.get_pool_status()
+                    if debug_config.should_log_at_level(DebugLevel.DEBUG)
+                    else None
+                ),
             }
-    
+
     def get_monitors(self, group_states: Optional[str] = None) -> Dict[str, Any]:
         """Get Datadog monitors"""
         try:
             # Only pass group_states if it's not None to avoid the API error
             kwargs = {}
             if group_states is not None:
-                kwargs['group_states'] = group_states
-            
+                kwargs["group_states"] = group_states
+
             response = self.monitors_api.list_monitors(**kwargs)
-            
+
             monitors = []
             for monitor in response:
-                monitors.append({
-                    "id": getattr(monitor, 'id', ''),
-                    "name": getattr(monitor, 'name', ''),
-                    "type": getattr(monitor, 'type', ''),
-                    "query": getattr(monitor, 'query', ''),
-                    "state": getattr(monitor.overall_state, 'value', '') if hasattr(monitor, 'overall_state') else '',
-                    "tags": getattr(monitor, 'tags', [])
-                })
-            
-            return {
-                "status": "success",
-                "monitors": monitors,
-                "count": len(monitors)
-            }
+                monitors.append(
+                    {
+                        "id": getattr(monitor, "id", ""),
+                        "name": getattr(monitor, "name", ""),
+                        "type": getattr(monitor, "type", ""),
+                        "query": getattr(monitor, "query", ""),
+                        "state": (
+                            getattr(monitor.overall_state, "value", "")
+                            if hasattr(monitor, "overall_state")
+                            else ""
+                        ),
+                        "tags": getattr(monitor, "tags", []),
+                    }
+                )
+
+            return {"status": "success", "monitors": monitors, "count": len(monitors)}
         except Exception as e:
             logger.error(f"Error getting monitors: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-    
+            return {"status": "error", "error": str(e)}
+
     def get_dashboards(self) -> Dict[str, Any]:
         """Get Datadog dashboards"""
         try:
             response = self.dashboards_api.list_dashboards()
-            
+
             dashboards = []
-            if hasattr(response, 'dashboards'):
+            if hasattr(response, "dashboards"):
                 for dashboard in response.dashboards:
-                    dashboards.append({
-                        "id": getattr(dashboard, 'id', ''),
-                        "title": getattr(dashboard, 'title', ''),
-                        "description": getattr(dashboard, 'description', ''),
-                        "url": getattr(dashboard, 'url', ''),
-                        "created_at": getattr(dashboard, 'created_at', ''),
-                        "modified_at": getattr(dashboard, 'modified_at', '')
-                    })
-            
+                    dashboards.append(
+                        {
+                            "id": getattr(dashboard, "id", ""),
+                            "title": getattr(dashboard, "title", ""),
+                            "description": getattr(dashboard, "description", ""),
+                            "url": getattr(dashboard, "url", ""),
+                            "created_at": getattr(dashboard, "created_at", ""),
+                            "modified_at": getattr(dashboard, "modified_at", ""),
+                        }
+                    )
+
             return {
                 "status": "success",
                 "dashboards": dashboards,
-                "count": len(dashboards)
+                "count": len(dashboards),
             }
         except Exception as e:
             logger.error(f"Error getting dashboards: {e}")
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            return {"status": "error", "error": str(e)}
 
     def list_active_metrics(self, filter_query: Optional[str] = None) -> Dict[str, Any]:
         """List active metrics in Datadog environment"""
         correlation_id = str(uuid.uuid4())[:8]
-        debug_log(DebugLevel.DEBUG, f"Starting list_active_metrics with filter_query: {filter_query}", correlation_id=correlation_id)
-        
+        debug_log(
+            DebugLevel.DEBUG,
+            f"Starting list_active_metrics with filter_query: {filter_query}",
+            correlation_id=correlation_id,
+        )
+
         try:
             # Get metrics from last 2 hours to ensure we get active metrics
-            from_time = int((datetime.now(timezone.utc) - timedelta(hours=2)).timestamp())
-            debug_log(DebugLevel.TRACE, f"Calculated from_time", {
-                "from_time": from_time,
-                "from_time_datetime": datetime.fromtimestamp(from_time, timezone.utc).isoformat()
-            }, correlation_id)
-            
+            from_time = int(
+                (datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()
+            )
+            debug_log(
+                DebugLevel.TRACE,
+                f"Calculated from_time",
+                {
+                    "from_time": from_time,
+                    "from_time_datetime": datetime.fromtimestamp(
+                        from_time, timezone.utc
+                    ).isoformat(),
+                },
+                correlation_id,
+            )
+
             # Build parameters dict - use _from instead of from_time
             params = {"_from": from_time}
             debug_log(DebugLevel.TRACE, f"Base params", params, correlation_id)
-            
+
             # Add optional filter parameters according to API spec
             if filter_query:
-                debug_log(DebugLevel.TRACE, f"Processing filter_query: {filter_query}", correlation_id=correlation_id)
+                debug_log(
+                    DebugLevel.TRACE,
+                    f"Processing filter_query: {filter_query}",
+                    correlation_id=correlation_id,
+                )
                 # The API supports 'host' and 'tag_filter' parameters
                 # If it looks like a hostname, use host parameter
-                if '.' in filter_query and not ':' in filter_query:
+                if "." in filter_query and not ":" in filter_query:
                     params["host"] = filter_query
-                    debug_log(DebugLevel.TRACE, f"Added host filter: {filter_query}", correlation_id=correlation_id)
+                    debug_log(
+                        DebugLevel.TRACE,
+                        f"Added host filter: {filter_query}",
+                        correlation_id=correlation_id,
+                    )
                 else:
                     # Otherwise use tag_filter for more complex queries
                     params["tag_filter"] = filter_query
-                    debug_log(DebugLevel.TRACE, f"Added tag_filter: {filter_query}", correlation_id=correlation_id)
-            
-            debug_log(DebugLevel.TRACE, f"Final params before API call", params, correlation_id)
-            debug_log(DebugLevel.DEBUG, f"Calling metrics_api.list_active_metrics", correlation_id=correlation_id)
-            
+                    debug_log(
+                        DebugLevel.TRACE,
+                        f"Added tag_filter: {filter_query}",
+                        correlation_id=correlation_id,
+                    )
+
+            debug_log(
+                DebugLevel.TRACE,
+                f"Final params before API call",
+                params,
+                correlation_id,
+            )
+            debug_log(
+                DebugLevel.DEBUG,
+                f"Calling metrics_api.list_active_metrics",
+                correlation_id=correlation_id,
+            )
+
             response = self.metrics_api.list_active_metrics(**params)
-            debug_log(DebugLevel.DEBUG, f"API call completed successfully", correlation_id=correlation_id)
-            debug_log(DebugLevel.TRACE, f"Response analysis", {
-                "response_type": str(type(response)),
-                "response_attributes": dir(response)
-            }, correlation_id)
-            
-            if hasattr(response, '__dict__'):
-                debug_log(DebugLevel.TRACE, f"Response dict", response.__dict__, correlation_id)
-            
+            debug_log(
+                DebugLevel.DEBUG,
+                f"API call completed successfully",
+                correlation_id=correlation_id,
+            )
+            debug_log(
+                DebugLevel.TRACE,
+                f"Response analysis",
+                {
+                    "response_type": str(type(response)),
+                    "response_attributes": dir(response),
+                },
+                correlation_id,
+            )
+
+            if hasattr(response, "__dict__"):
+                debug_log(
+                    DebugLevel.TRACE,
+                    f"Response dict",
+                    response.__dict__,
+                    correlation_id,
+                )
+
             metrics = []
-            if hasattr(response, 'metrics'):
-                debug_log(DebugLevel.TRACE, f"Found metrics attribute", correlation_id=correlation_id)
+            if hasattr(response, "metrics"):
+                debug_log(
+                    DebugLevel.TRACE,
+                    f"Found metrics attribute",
+                    correlation_id=correlation_id,
+                )
                 if response.metrics:
                     metrics = response.metrics
-                    debug_log(DebugLevel.DEBUG, f"Retrieved {len(metrics)} metrics from response.metrics", correlation_id=correlation_id)
+                    debug_log(
+                        DebugLevel.DEBUG,
+                        f"Retrieved {len(metrics)} metrics from response.metrics",
+                        correlation_id=correlation_id,
+                    )
                 else:
-                    debug_log(DebugLevel.INFO, f"response.metrics is empty or None: {response.metrics}", correlation_id=correlation_id)
+                    debug_log(
+                        DebugLevel.INFO,
+                        f"response.metrics is empty or None: {response.metrics}",
+                        correlation_id=correlation_id,
+                    )
             else:
-                debug_log(DebugLevel.INFO, f"No 'metrics' attribute found in response", correlation_id=correlation_id)
+                debug_log(
+                    DebugLevel.INFO,
+                    f"No 'metrics' attribute found in response",
+                    correlation_id=correlation_id,
+                )
                 # Try alternative attribute names
-                for attr in ['data', 'result', 'items', 'metric_names']:
+                for attr in ["data", "result", "items", "metric_names"]:
                     if hasattr(response, attr):
-                        debug_log(DebugLevel.TRACE, f"Found alternative attribute '{attr}'", {attr: getattr(response, attr)}, correlation_id)
-                        
-            debug_log(DebugLevel.DEBUG, f"Final metrics count: {len(metrics)}", correlation_id=correlation_id)
-            
+                        debug_log(
+                            DebugLevel.TRACE,
+                            f"Found alternative attribute '{attr}'",
+                            {attr: getattr(response, attr)},
+                            correlation_id,
+                        )
+
+            debug_log(
+                DebugLevel.DEBUG,
+                f"Final metrics count: {len(metrics)}",
+                correlation_id=correlation_id,
+            )
+
             result = {
                 "status": "success",
                 "metrics": metrics,
                 "count": len(metrics),
                 "filter_applied": filter_query,
                 "from_time": from_time,
-                "timeframe_hours": 2
+                "timeframe_hours": 2,
             }
-            
+
             debug_log(DebugLevel.TRACE, f"Returning result", result, correlation_id)
             return result
-            
+
         except Exception as e:
             import traceback
-            debug_log(DebugLevel.INFO, f"Exception in list_active_metrics", {
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc()
-            }, correlation_id)
+
+            debug_log(
+                DebugLevel.INFO,
+                f"Exception in list_active_metrics",
+                {
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                    "traceback": traceback.format_exc(),
+                },
+                correlation_id,
+            )
             return {
                 "status": "error",
                 "error": str(e),
                 "metrics": [],
                 "count": 0,
-                "suggestion": "Check API credentials and ensure metrics exist in the specified timeframe"
+                "suggestion": "Check API credentials and ensure metrics exist in the specified timeframe",
             }
-    
+
     def search_spans(
-        self, 
-        query: str, 
+        self,
+        query: str,
         from_time: Optional[str] = None,
         to_time: Optional[str] = None,
-        limit: int = 100
+        limit: int = 100,
     ) -> Dict[str, Any]:
         """Search for spans based on query criteria"""
         try:
             # Set default time range if not provided
             if not from_time:
-                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
             if not to_time:
-                to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-                
+                to_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
             # Note: SpansApi implementation may vary - this is a placeholder structure
             spans = []  # Placeholder - actual API call would go here
-            
+
             return {
                 "status": "success",
                 "query": query,
                 "from_time": from_time,
                 "to_time": to_time,
                 "spans": spans,
-                "count": len(spans)
+                "count": len(spans),
             }
         except Exception as e:
             logger.error(f"Error searching spans: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "query": query
-            }
-    
+            return {"status": "error", "error": str(e), "query": query}
+
     def get_trace_data(self, trace_id: str) -> Dict[str, Any]:
         """Get all spans for a specific trace ID"""
         try:
             # Note: Actual API method may vary - placeholder implementation
             trace_data = {"trace_id": trace_id, "spans": []}
-            
-            return {
-                "status": "success",
-                "trace_id": trace_id,
-                "data": trace_data
-            }
+
+            return {"status": "success", "trace_id": trace_id, "data": trace_data}
         except Exception as e:
             logger.error(f"Error getting trace data: {e}")
-            return {
-                "status": "error", 
-                "error": str(e),
-                "trace_id": trace_id
-            }
-    
+            return {"status": "error", "error": str(e), "trace_id": trace_id}
+
     def list_incidents(
         self,
         include_field: Optional[str] = None,
         page_size: int = 100,
-        page_offset: int = 0
+        page_offset: int = 0,
     ) -> Dict[str, Any]:
         """List incidents from Datadog incident management"""
         try:
             # Note: Actual API call depends on incidents API structure
             incidents = []  # Placeholder for actual implementation
-            
+
             return {
                 "status": "success",
                 "incidents": incidents,
                 "count": len(incidents),
                 "page_size": page_size,
-                "page_offset": page_offset
+                "page_offset": page_offset,
             }
         except Exception as e:
             logger.error(f"Error listing incidents: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "incidents": []
-            }
-    
+            return {"status": "error", "error": str(e), "incidents": []}
+
     def get_incident_details(self, incident_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific incident"""
         try:
             # Note: Placeholder for actual API implementation
             incident_data = {"incident_id": incident_id}
-            
+
             return {
                 "status": "success",
                 "incident_id": incident_id,
-                "data": incident_data
+                "data": incident_data,
             }
         except Exception as e:
             logger.error(f"Error getting incident details: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "incident_id": incident_id
-            }
-    
+            return {"status": "error", "error": str(e), "incident_id": incident_id}
+
     def list_hosts_data(
         self,
         filter_query: Optional[str] = None,
         sort_by: str = "name",
         count: int = 100,
-        start: int = 0
+        start: int = 0,
     ) -> Dict[str, Any]:
         """List infrastructure hosts"""
         try:
             response = self.hosts_api.list_hosts(
-                filter=filter_query,
-                sort_field=sort_by,
-                count=count,
-                start=start
+                filter=filter_query, sort_field=sort_by, count=count, start=start
             )
-            
+
             hosts = []
-            if hasattr(response, 'host_list') and response.host_list:
+            if hasattr(response, "host_list") and response.host_list:
                 hosts = [
                     {
-                        "name": host.name if hasattr(host, 'name') else "unknown",
-                        "id": host.id if hasattr(host, 'id') else None,
-                        "last_reported_time": host.last_reported_time if hasattr(host, 'last_reported_time') else None,
-                        "up": host.up if hasattr(host, 'up') else None,
-                        "sources": host.sources if hasattr(host, 'sources') else [],
-                        "tags_by_source": host.tags_by_source if hasattr(host, 'tags_by_source') else {}
-                    } 
+                        "name": host.name if hasattr(host, "name") else "unknown",
+                        "id": host.id if hasattr(host, "id") else None,
+                        "last_reported_time": (
+                            host.last_reported_time
+                            if hasattr(host, "last_reported_time")
+                            else None
+                        ),
+                        "up": host.up if hasattr(host, "up") else None,
+                        "sources": host.sources if hasattr(host, "sources") else [],
+                        "tags_by_source": (
+                            host.tags_by_source
+                            if hasattr(host, "tags_by_source")
+                            else {}
+                        ),
+                    }
                     for host in response.host_list
                 ]
-            
+
             return {
                 "status": "success",
                 "hosts": hosts,
                 "count": len(hosts),
-                "total_returned": response.total_returned if hasattr(response, 'total_returned') else len(hosts),
-                "total_matching": response.total_matching if hasattr(response, 'total_matching') else len(hosts)
+                "total_returned": (
+                    response.total_returned
+                    if hasattr(response, "total_returned")
+                    else len(hosts)
+                ),
+                "total_matching": (
+                    response.total_matching
+                    if hasattr(response, "total_matching")
+                    else len(hosts)
+                ),
             }
         except Exception as e:
             logger.error(f"Error listing hosts: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "hosts": []
-            }
-    
+            return {"status": "error", "error": str(e), "hosts": []}
+
     def get_host_details(self, hostname: str) -> Dict[str, Any]:
         """Get detailed information about a specific host"""
         try:
             response = self.hosts_api.get_host(host_name=hostname)
-            
+
             host_data = {
                 "hostname": hostname,
-                "details": "Host data retrieved successfully"
+                "details": "Host data retrieved successfully",
             }
-            
-            if hasattr(response, 'host'):
+
+            if hasattr(response, "host"):
                 host = response.host
                 host_data = {
                     "hostname": hostname,
-                    "name": host.name if hasattr(host, 'name') else hostname,
-                    "id": host.id if hasattr(host, 'id') else None,
-                    "last_reported_time": host.last_reported_time if hasattr(host, 'last_reported_time') else None,
-                    "up": host.up if hasattr(host, 'up') else None,
-                    "sources": host.sources if hasattr(host, 'sources') else [],
-                    "tags_by_source": host.tags_by_source if hasattr(host, 'tags_by_source') else {},
-                    "apps": host.apps if hasattr(host, 'apps') else []
+                    "name": host.name if hasattr(host, "name") else hostname,
+                    "id": host.id if hasattr(host, "id") else None,
+                    "last_reported_time": (
+                        host.last_reported_time
+                        if hasattr(host, "last_reported_time")
+                        else None
+                    ),
+                    "up": host.up if hasattr(host, "up") else None,
+                    "sources": host.sources if hasattr(host, "sources") else [],
+                    "tags_by_source": (
+                        host.tags_by_source if hasattr(host, "tags_by_source") else {}
+                    ),
+                    "apps": host.apps if hasattr(host, "apps") else [],
                 }
-            
-            return {
-                "status": "success",
-                "hostname": hostname,
-                "data": host_data
-            }
+
+            return {"status": "success", "hostname": hostname, "data": host_data}
         except Exception as e:
             logger.error(f"Error getting host details: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "hostname": hostname
-            }
+            return {"status": "error", "error": str(e), "hostname": hostname}
+
 
 # Initialize FastMCP server
 mcp = FastMCP("Datadog MCP Server")
+
 
 # Initialize Datadog client with key rotation support
 def get_datadog_credentials():
@@ -904,116 +1100,106 @@ def get_datadog_credentials():
     try:
         # Load multiple key pairs from environment
         key_pairs = load_keys_from_environment()
-        
+
         # Get rotation configuration
         rotation_config = get_rotation_config()
-        
+
         # Create key pool manager
         key_pool = KeyPoolManager(
             rotation_strategy=rotation_config["strategy"],
             circuit_breaker_threshold=rotation_config["circuit_breaker_threshold"],
             circuit_breaker_timeout=rotation_config["circuit_breaker_timeout"],
-            health_check_interval=rotation_config["health_check_interval"]
+            health_check_interval=rotation_config["health_check_interval"],
         )
-        
+
         # Add all keys to the pool
         for key_pair in key_pairs:
             key_pool.add_key(key_pair)
-        
+
         # Get primary site (from first key or environment)
         primary_site = key_pairs[0].site if key_pairs else "datadoghq.com"
-        
+
         return key_pool, primary_site
-        
+
     except Exception as e:
         logger.error(f"Failed to initialize Datadog key rotation: {e}")
         # Fallback to single key mode for backwards compatibility
-        api_key = (
-            os.getenv("DD_API_KEY") or 
-            os.getenv("DATADOG_API_KEY") or 
-            ""
-        )
-        app_key = (
-            os.getenv("DD_APP_KEY") or 
-            os.getenv("DATADOG_APP_KEY") or 
-            ""
-        )
-        site = (
-            os.getenv("DD_SITE") or 
-            os.getenv("DATADOG_SITE") or 
-            "datadoghq.com"
-        )
-        
+        api_key = os.getenv("DD_API_KEY") or os.getenv("DATADOG_API_KEY") or ""
+        app_key = os.getenv("DD_APP_KEY") or os.getenv("DATADOG_APP_KEY") or ""
+        site = os.getenv("DD_SITE") or os.getenv("DATADOG_SITE") or "datadoghq.com"
+
         if not api_key or not app_key:
             raise ValueError("Datadog API credentials required")
-        
+
         # Create single-key pool for backwards compatibility
         key_pool = KeyPoolManager()
-        key_pair = KeyPair(
-            id="fallback",
-            api_key=api_key,
-            app_key=app_key,
-            site=site
-        )
+        key_pair = KeyPair(id="fallback", api_key=api_key, app_key=app_key, site=site)
         key_pool.add_key(key_pair)
-        
+
         return key_pool, site
+
 
 try:
     key_pool, primary_site = get_datadog_credentials()
-    
-    datadog_config = DatadogConfig(
-        key_pool=key_pool,
-        primary_site=primary_site
-    )
-    
+
+    datadog_config = DatadogConfig(key_pool=key_pool, primary_site=primary_site)
+
     # Log key pool status
     pool_status = key_pool.get_pool_status()
-    debug_log(DebugLevel.INFO, "Datadog Key Pool Initialized", {
-        "total_keys": pool_status["total_keys"],
-        "available_keys": pool_status["available_keys"], 
-        "rotation_strategy": pool_status["rotation_strategy"],
-        "primary_site": primary_site
-    })
-    
+    debug_log(
+        DebugLevel.INFO,
+        "Datadog Key Pool Initialized",
+        {
+            "total_keys": pool_status["total_keys"],
+            "available_keys": pool_status["available_keys"],
+            "rotation_strategy": pool_status["rotation_strategy"],
+            "primary_site": primary_site,
+        },
+    )
+
     if pool_status["total_keys"] == 0:
         logger.error("No valid Datadog API keys available")
         exit(1)
-        
+
 except Exception as e:
     logger.error(f"Failed to initialize Datadog configuration: {e}")
     exit(1)
 
 datadog_server = DatadogMCPServer(datadog_config)
 
+
 # Add a simple health check tool for debugging
 @mcp.tool
 def server_health_check() -> Dict[str, Any]:
     """
     Simple health check to verify server is working and can connect to Datadog API.
-    
+
     Returns:
         Dictionary containing server status and basic connectivity information
     """
     try:
         logger.info("Health check requested")
-        
+
         # Test basic server functionality
         current_time = datetime.now(timezone.utc)
-        
+
         # Test Datadog API connectivity (simple call)
         try:
             # Try to list a small number of metrics to test API connectivity
             api_test = datadog_server.list_active_metrics()
-            datadog_status = "connected" if api_test.get("status") == "success" else "error"
-            datadog_error = api_test.get("error", "") if api_test.get("status") == "error" else None
+            datadog_status = (
+                "connected" if api_test.get("status") == "success" else "error"
+            )
+            datadog_error = (
+                api_test.get("error", "") if api_test.get("status") == "error" else None
+            )
         except Exception as e:
             datadog_status = "error"
             datadog_error = str(e)
-        
+
         # Get key pool status
         key_pool_status = datadog_server.key_pool.get_pool_status()
-        
+
         result = {
             "status": "healthy",
             "server_time": current_time.isoformat(),
@@ -1024,247 +1210,271 @@ def server_health_check() -> Dict[str, Any]:
                 "enabled": True,
                 "total_keys": key_pool_status["total_keys"],
                 "available_keys": key_pool_status["available_keys"],
-                "rotation_strategy": key_pool_status["rotation_strategy"]
-            }
+                "rotation_strategy": key_pool_status["rotation_strategy"],
+            },
         }
-        
+
         if datadog_error:
             result["datadog_error"] = datadog_error
-            
+
         logger.info(f"Health check completed: {datadog_status}")
         return result
-        
+
     except Exception as e:
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
             "error": str(e),
-            "server_time": datetime.now(timezone.utc).isoformat()
+            "server_time": datetime.now(timezone.utc).isoformat(),
         }
+
 
 @mcp.tool
 def get_key_pool_status() -> Dict[str, Any]:
     """
     Get detailed status of the API key pool for monitoring and debugging.
-    
+
     Returns:
         Dictionary containing comprehensive key pool metrics and health information
     """
     try:
         status = datadog_server.key_pool.get_pool_status()
-        
+
         # Add additional context
         status["monitoring"] = {
-            "health_check_enabled": datadog_server.key_pool._health_check_thread is not None,
+            "health_check_enabled": datadog_server.key_pool._health_check_thread
+            is not None,
             "circuit_breaker_threshold": datadog_server.key_pool.circuit_breaker_threshold,
-            "circuit_breaker_timeout": datadog_server.key_pool.circuit_breaker_timeout
+            "circuit_breaker_timeout": datadog_server.key_pool.circuit_breaker_timeout,
         }
-        
+
         # Add recommendations
         recommendations = []
         if status["available_keys"] == 0:
-            recommendations.append("⚠️ No available keys - check key health and authentication")
+            recommendations.append(
+                "⚠️ No available keys - check key health and authentication"
+            )
         elif status["available_keys"] == 1:
-            recommendations.append("⚠️ Only one key available - consider adding more keys for redundancy")
+            recommendations.append(
+                "⚠️ Only one key available - consider adding more keys for redundancy"
+            )
         elif status["available_keys"] < status["total_keys"]:
-            recommendations.append(f"ℹ️ {status['total_keys'] - status['available_keys']} keys currently unavailable")
-        
+            recommendations.append(
+                f"ℹ️ {status['total_keys'] - status['available_keys']} keys currently unavailable"
+            )
+
         # Check for keys with low success rates
         for key_info in status["keys"]:
             if key_info["success_rate"] < 0.8 and key_info["total_requests"] > 10:
-                recommendations.append(f"⚠️ Key {key_info['id']} has low success rate ({key_info['success_rate']:.1%})")
-        
+                recommendations.append(
+                    f"⚠️ Key {key_info['id']} has low success rate ({key_info['success_rate']:.1%})"
+                )
+
         status["recommendations"] = recommendations
         status["status"] = "success"
-        
+
         return status
-        
+
     except Exception as e:
         logger.error(f"Error getting key pool status: {e}")
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+        return {"status": "error", "error": str(e)}
+
 
 @mcp.tool
 @mcp_debug_decorator("get_metrics")
 def get_metrics(
-    query: str,
-    hours_back: int = 1,
-    minutes_back: Optional[int] = None
+    query: str, hours_back: int = 1, minutes_back: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Query timeseries metrics data from Datadog with comprehensive validation.
-    
+
     Args:
         query: Datadog metrics query (e.g., "avg:system.cpu.user{*}")
         hours_back: Number of hours back from now to query (default: 1, max: 8760 for 1 year)
         minutes_back: Number of minutes back from now to query (overrides hours_back if provided, max: 525600 for 1 year)
-    
+
     Returns:
         Dictionary containing metrics data or error information
-        
+
     Examples:
         # Last 30 minutes of CPU usage
         get_metrics("avg:system.cpu.user{*}", minutes_back=30)
-        
+
         # Last 2 hours of memory usage
         get_metrics("avg:system.mem.used{*}", hours_back=2)
-        
+
         # Last week of request rates
         get_metrics("sum:trace.http.request.hits{*}", hours_back=168)  # 7 days
-        
-        # Last month of error rates  
+
+        # Last month of error rates
         get_metrics("sum:trace.http.request.errors{*}", hours_back=720)  # 30 days
     """
     try:
         # Log incoming request for debugging
-        logger.info(f"get_metrics called with query='{query}', hours_back={hours_back}, minutes_back={minutes_back}")
-        
+        logger.info(
+            f"get_metrics called with query='{query}', hours_back={hours_back}, minutes_back={minutes_back}"
+        )
+
         # Input validation
         if not query or not query.strip():
             return {
                 "status": "error",
                 "error": "Query parameter is required and cannot be empty",
-                "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'"
+                "suggestion": "Provide a valid Datadog metrics query like 'avg:system.cpu.user{*}'",
             }
-        
+
         # Validate time parameters
         if minutes_back is not None:
             if not isinstance(minutes_back, int) or minutes_back <= 0:
                 return {
                     "status": "error",
                     "error": f"minutes_back must be a positive integer, got {minutes_back} ({type(minutes_back)})",
-                    "suggestion": "Use a positive number of minutes (e.g., 30 for last 30 minutes)"
+                    "suggestion": "Use a positive number of minutes (e.g., 30 for last 30 minutes)",
                 }
             if minutes_back > 525600:  # 1 year in minutes
                 return {
                     "status": "error",
                     "error": f"minutes_back cannot exceed 525600 (1 year), got {minutes_back}",
-                    "suggestion": "Use a smaller time range for better performance"
+                    "suggestion": "Use a smaller time range for better performance",
                 }
-            
+
             # Use minutes_back if provided - using timezone-aware datetime
             now_utc = datetime.now(timezone.utc)
             to_time = int(now_utc.timestamp())
             from_time = int((now_utc - timedelta(minutes=minutes_back)).timestamp())
             time_desc = f"last {minutes_back} minutes"
-            
+
         else:
             if not isinstance(hours_back, int) or hours_back <= 0:
                 return {
                     "status": "error",
                     "error": f"hours_back must be a positive integer, got {hours_back} ({type(hours_back)})",
-                    "suggestion": "Use a positive number of hours (e.g., 1 for last hour)"
+                    "suggestion": "Use a positive number of hours (e.g., 1 for last hour)",
                 }
             if hours_back > 8760:  # 1 year in hours
                 return {
                     "status": "error",
                     "error": f"hours_back cannot exceed 8760 (1 year), got {hours_back}",
-                    "suggestion": "Use a smaller time range for better performance"
+                    "suggestion": "Use a smaller time range for better performance",
                 }
-            
+
             # Fall back to hours_back - using timezone-aware datetime
             now_utc = datetime.now(timezone.utc)
             to_time = int(now_utc.timestamp())
             from_time = int((now_utc - timedelta(hours=hours_back)).timestamp())
             time_desc = f"last {hours_back} hours"
-        
+
         logger.info(f"Getting metrics for '{query}' over {time_desc}")
         result = datadog_server.query_metrics(query, from_time, to_time)
-        
+
         # Add time description to successful results
         if result.get("status") == "success":
             result["time_description"] = time_desc
             result["query_type"] = "timeseries_metrics"
-        
+
         return result
-        
+
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Error in get_metrics for query '{query}': {error_msg}")
-        logger.error(f"Parameters: query={query}, hours_back={hours_back}, minutes_back={minutes_back}")
+        logger.error(
+            f"Parameters: query={query}, hours_back={hours_back}, minutes_back={minutes_back}"
+        )
         logger.error(f"Exception type: {type(e).__name__}")
-        
+
         return {
             "status": "error",
             "error": f"Internal server error: {error_msg}",
             "query": query,
             "hours_back": hours_back,
             "minutes_back": minutes_back,
-            "suggestion": "Check server logs for details. Verify query syntax: 'avg:system.cpu.user{*}'"
+            "suggestion": "Check server logs for details. Verify query syntax: 'avg:system.cpu.user{*}'",
         }
+
 
 @mcp.tool
 @mcp_debug_decorator("list_metrics")
-def list_metrics(
-    filter_query: Optional[str] = None
-) -> Dict[str, Any]:
+def list_metrics(filter_query: Optional[str] = None) -> Dict[str, Any]:
     """
     Retrieve a list of available metrics in your Datadog environment.
-    
+
     Args:
         filter_query: Optional filter to limit metrics returned. Can be:
                      - A hostname (e.g., "web-server-01") to filter by host
                      - A tag filter expression (e.g., "env:prod", "service:web-app")
                      - Leave empty to get all active metrics
-    
+
     Returns:
         Dictionary containing list of available metrics or error information
-        
+
     Examples:
         # Get all active metrics
         list_metrics()
-        
+
         # Get metrics for a specific host
         list_metrics("web-server-01")
-        
+
         # Get metrics with specific tags
         list_metrics("env:production")
     """
     try:
-        logger.info(f"TRACE: MCP list_metrics called with filter: {filter_query or 'none'}")
+        logger.info(
+            f"TRACE: MCP list_metrics called with filter: {filter_query or 'none'}"
+        )
         logger.info(f"TRACE: Calling datadog_server.list_active_metrics...")
-        
+
         result = datadog_server.list_active_metrics(filter_query)
-        
+
         logger.info(f"TRACE: datadog_server.list_active_metrics returned: {result}")
         logger.info(f"TRACE: Result type: {type(result)}")
-        logger.info(f"TRACE: Result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}")
-        
-        if isinstance(result, dict) and 'metrics' in result:
-            logger.info(f"TRACE: Found {len(result.get('metrics', []))} metrics in result")
-            if result.get('metrics'):
-                logger.info(f"TRACE: First few metrics: {result['metrics'][:3] if len(result['metrics']) > 0 else 'Empty'}")
-        
+        logger.info(
+            f"TRACE: Result keys: {result.keys() if isinstance(result, dict) else 'Not a dict'}"
+        )
+
+        if isinstance(result, dict) and "metrics" in result:
+            logger.info(
+                f"TRACE: Found {len(result.get('metrics', []))} metrics in result"
+            )
+            if result.get("metrics"):
+                logger.info(
+                    f"TRACE: First few metrics: {result['metrics'][:3] if len(result['metrics']) > 0 else 'Empty'}"
+                )
+
         # Add helpful metadata to successful responses
         if result.get("status") == "success":
-            result["filter_type"] = "hostname" if filter_query and '.' in filter_query and ':' not in filter_query else "tag_filter" if filter_query else "none"
-            
+            result["filter_type"] = (
+                "hostname"
+                if filter_query and "." in filter_query and ":" not in filter_query
+                else "tag_filter" if filter_query else "none"
+            )
+
         logger.info(f"TRACE: Final MCP list_metrics result: {result}")
         return result
-        
+
     except Exception as e:
         error_msg = str(e)
         logger.error(f"TRACE: Exception in MCP list_metrics: {error_msg}")
         logger.error(f"Error listing metrics with filter '{filter_query}': {error_msg}")
-        
+
         # Enhanced error categorization
         if "403" in error_msg or "Forbidden" in error_msg:
             suggestion = "Check API key permissions. Ensure 'metrics_read' permission is granted."
         elif "401" in error_msg or "Unauthorized" in error_msg:
-            suggestion = "Check API key and APP key credentials in environment variables."
+            suggestion = (
+                "Check API key and APP key credentials in environment variables."
+            )
         elif "timeout" in error_msg.lower():
             suggestion = "Request timeout. Try again or use a more specific filter."
         else:
             suggestion = "Check network connectivity and try again."
-        
+
         return {
-            "status": "error", 
+            "status": "error",
             "error": error_msg,
             "filter_query": filter_query,
-            "suggestion": suggestion
+            "suggestion": suggestion,
         }
+
 
 @mcp.tool
 @mcp_debug_decorator("get_logs")
@@ -1278,40 +1488,40 @@ def get_logs(
     indexes: Optional[List[str]] = None,
     sort: str = "timestamp",
     cursor: Optional[str] = None,
-    max_total_logs: Optional[int] = None
+    max_total_logs: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Search Datadog logs with enhanced flexibility and pagination support.
-    
+
     Args:
         query: Log search query (e.g., "service:web-app ERROR", "status:error")
         limit: Number of logs per page (max 1000, default: 100)
         hours_back: Number of hours back from now to search (ignored if from_time/to_time provided)
         minutes_back: Number of minutes back from now to search (overrides hours_back if provided)
-        from_time: Start time in ISO format (e.g., "2024-01-01T00:00:00Z") 
+        from_time: Start time in ISO format (e.g., "2024-01-01T00:00:00Z")
         to_time: End time in ISO format (e.g., "2024-01-01T23:59:59Z")
         indexes: List of log indexes to search (e.g., ["main", "security"])
         sort: Sort order ("timestamp" for ascending, "-timestamp" for descending, default: "timestamp")
         cursor: Pagination cursor from previous response to get next page
         max_total_logs: Maximum total logs to retrieve across all pages (default: same as limit)
-    
+
     Returns:
         Dictionary containing log data, pagination info, or error information
-        
+
     Examples:
         # Last 30 minutes of errors
         get_logs("status:error", minutes_back=30)
-        
-        # Last 2 hours of service logs  
+
+        # Last 2 hours of service logs
         get_logs("service:web-app", hours_back=2)
-        
+
         # Specific time range
         get_logs("service:web-app", from_time="2024-01-01T00:00:00Z", to_time="2024-01-01T23:59:59Z")
-        
+
         # Last week (use hours_back for longer periods)
         get_logs("deploy", hours_back=168)  # 7 days * 24 hours
-        
-        # Last month (approximately)  
+
+        # Last month (approximately)
         get_logs("critical", hours_back=720)  # 30 days * 24 hours
     """
     # Handle time range parameters - treat empty strings as None
@@ -1320,50 +1530,64 @@ def get_logs(
     to_time = to_time if to_time and to_time.strip() else None
     hours_back = hours_back if hours_back and str(hours_back).strip() else None
     minutes_back = minutes_back if minutes_back and str(minutes_back).strip() else None
-    
+
     calculated_from_time = from_time
     calculated_to_time = to_time
-    
+
     # If no explicit times provided, use minutes_back or hours_back (prioritize minutes_back)
     if from_time is None and to_time is None:
         if minutes_back is not None:
             # Use minutes_back if provided
-            calculated_from_time = (datetime.now(timezone.utc) - timedelta(minutes=minutes_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
-            calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            calculated_from_time = (
+                datetime.now(timezone.utc) - timedelta(minutes=minutes_back)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            calculated_to_time = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
         else:
             # Fall back to hours_back (default to 1 hour)
             hours_back = hours_back or 1
-            calculated_from_time = (datetime.now(timezone.utc) - timedelta(hours=hours_back)).strftime('%Y-%m-%dT%H:%M:%SZ')
-            calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+            calculated_from_time = (
+                datetime.now(timezone.utc) - timedelta(hours=hours_back)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+            calculated_to_time = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
     elif from_time is None and to_time is not None:
         # If only to_time is provided, default from_time to 1 hour before to_time
         try:
-            to_dt = datetime.fromisoformat(to_time.replace('Z', '+00:00'))
-            calculated_from_time = (to_dt - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            to_dt = datetime.fromisoformat(to_time.replace("Z", "+00:00"))
+            calculated_from_time = (to_dt - timedelta(hours=1)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
         except ValueError:
-            calculated_from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            calculated_from_time = (
+                datetime.now(timezone.utc) - timedelta(hours=1)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
     elif from_time is not None and to_time is None:
         # If only from_time is provided, default to_time to now
-        calculated_to_time = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-    
+        calculated_to_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     # Validate time range order
     if calculated_from_time and calculated_to_time:
         try:
-            from_dt = datetime.fromisoformat(calculated_from_time.replace('Z', '+00:00'))
-            to_dt = datetime.fromisoformat(calculated_to_time.replace('Z', '+00:00'))
+            from_dt = datetime.fromisoformat(
+                calculated_from_time.replace("Z", "+00:00")
+            )
+            to_dt = datetime.fromisoformat(calculated_to_time.replace("Z", "+00:00"))
             if from_dt >= to_dt:
                 return {
                     "status": "error",
                     "error": f"Invalid time range: from_time ({calculated_from_time}) must be before to_time ({calculated_to_time})",
-                    "suggestion": "Swap your from_time and to_time values, or use hours_back parameter instead"
+                    "suggestion": "Swap your from_time and to_time values, or use hours_back parameter instead",
                 }
         except ValueError as e:
             return {
-                "status": "error", 
+                "status": "error",
                 "error": f"Invalid time format: {str(e)}",
-                "suggestion": "Use ISO format like '2025-09-14T15:00:00Z'"
+                "suggestion": "Use ISO format like '2025-09-14T15:00:00Z'",
             }
-    
+
     return datadog_server.search_logs(
         query=query,
         limit=limit,
@@ -1372,172 +1596,179 @@ def get_logs(
         indexes=indexes,
         sort=sort,
         cursor=cursor,
-        max_total_logs=max_total_logs
+        max_total_logs=max_total_logs,
     )
+
 
 @mcp.tool
 def get_next_datadog_logs_page(cursor: str, limit: int = 100) -> Dict[str, Any]:
     """
     Get the next page of Datadog logs using a pagination cursor.
-    
+
     Args:
         cursor: Pagination cursor from previous search_datadog_logs response
         limit: Number of logs to return in this page (max 1000, default: 100)
-    
+
     Returns:
         Dictionary containing the next page of log data or error information
     """
     if not cursor:
         return {
             "status": "error",
-            "error": "Cursor parameter is required for pagination"
+            "error": "Cursor parameter is required for pagination",
         }
-    
+
     # Use the enhanced search method with cursor
     return datadog_server.search_logs(
         query="*",  # Use wildcard since cursor contains the original query context
         limit=limit,
         cursor=cursor,
-        max_total_logs=limit  # Only get one page worth
+        max_total_logs=limit,  # Only get one page worth
     )
 
+
 @mcp.tool
-def get_monitors(
-    group_states: Optional[str] = None
-) -> Dict[str, Any]:
+def get_monitors(group_states: Optional[str] = None) -> Dict[str, Any]:
     """
     Get Datadog monitors, optionally filtered by group states.
-    
+
     Args:
         group_states: Comma-separated group states to filter by (e.g., "alert,warn" or "all")
                      Valid values: "all", "alert", "warn", "no data"
-    
+
     Returns:
         Dictionary containing monitor data or error information
     """
     return datadog_server.get_monitors(group_states)
 
+
 @mcp.tool
 def list_dashboards() -> Dict[str, Any]:
     """
     Get list of Datadog dashboards.
-    
+
     Returns:
         Dictionary containing dashboard data or error information
     """
     return datadog_server.get_dashboards()
+
 
 @mcp.tool
 def list_spans(
     query: str,
     from_time: Optional[str] = None,
     to_time: Optional[str] = None,
-    limit: int = 100
+    limit: int = 100,
 ) -> Dict[str, Any]:
     """
     Search for spans that help investigate performance issues and dependencies.
-    
+
     Args:
         query: Search query for spans (e.g., service:web-frontend, resource:GET /api/*)
         from_time: Start time in ISO format (default: 1 hour ago)
-        to_time: End time in ISO format (default: now)  
+        to_time: End time in ISO format (default: now)
         limit: Maximum number of spans to return (default: 100)
-    
+
     Returns:
         Dictionary containing spans data or error information
     """
     return datadog_server.search_spans(query, from_time, to_time, limit)
 
+
 @mcp.tool
 def get_trace(trace_id: str) -> Dict[str, Any]:
     """
     Retrieve all spans from a specific trace ID for distributed tracing analysis.
-    
+
     Args:
         trace_id: The unique trace identifier
-        
+
     Returns:
         Dictionary containing complete trace data with all spans or error information
     """
     return datadog_server.get_trace_data(trace_id)
 
+
 @mcp.tool
 def list_incidents(
-    include_field: Optional[str] = None,
-    page_size: int = 100,
-    page_offset: int = 0
+    include_field: Optional[str] = None, page_size: int = 100, page_offset: int = 0
 ) -> Dict[str, Any]:
     """
     Retrieve a list of ongoing incidents from Datadog incident management.
-    
+
     Args:
         include_field: Optional field to include in response
         page_size: Number of incidents per page (default: 100)
         page_offset: Page offset for pagination (default: 0)
-        
+
     Returns:
         Dictionary containing incidents list or error information
     """
     return datadog_server.list_incidents(include_field, page_size, page_offset)
 
+
 @mcp.tool
 def get_incident(incident_id: str) -> Dict[str, Any]:
     """
     Retrieve details for a specific incident.
-    
+
     Args:
         incident_id: The unique incident identifier
-        
+
     Returns:
         Dictionary containing detailed incident information or error information
     """
     return datadog_server.get_incident_details(incident_id)
+
 
 @mcp.tool
 def list_hosts(
     filter_query: Optional[str] = None,
     sort_by: str = "name",
     count: int = 100,
-    start: int = 0
+    start: int = 0,
 ) -> Dict[str, Any]:
     """
     Get infrastructure hosts information for system health analysis.
-    
+
     Args:
         filter_query: Filter to apply to host list (e.g., "env:production")
         sort_by: Field to sort by (default: "name")
         count: Maximum number of hosts to return (default: 100)
         start: Starting position for pagination (default: 0)
-        
+
     Returns:
         Dictionary containing hosts information or error information
     """
     return datadog_server.list_hosts_data(filter_query, sort_by, count, start)
 
-@mcp.tool  
+
+@mcp.tool
 def get_host(hostname: str) -> Dict[str, Any]:
     """
     Get detailed information about a specific host.
-    
+
     Args:
         hostname: The hostname to get details for
-        
+
     Returns:
-        Dictionary containing detailed host information or error information  
+        Dictionary containing detailed host information or error information
     """
     return datadog_server.get_host_details(hostname)
 
+
 # Deprecated aliases removed for cleaner codebase
 # Use standard tool names: get_metrics, get_logs, get_monitors, list_dashboards
+
 
 @mcp.resource("datadog://metrics/{query}")
 def get_metrics_resource(query: str) -> str:
     """
     Get metrics data as a resource.
-    
+
     Args:
         query: Datadog metrics query
-    
+
     Returns:
         Formatted metrics data as string
     """
@@ -1547,23 +1778,26 @@ def get_metrics_resource(query: str) -> str:
     else:
         return f"Error querying metrics: {result['error']}"
 
+
 @mcp.resource("datadog://logs/{query}")
 def get_logs_resource(query: str) -> str:
     """
     Get logs data as a resource with basic formatting.
-    
+
     Args:
         query: Log search query
-    
+
     Returns:
         Formatted logs data as string
     """
     result = get_logs(query, limit=50)  # Get more logs by default for resources
     if result["status"] == "success":
-        logs_text = "\n".join([
-            f"[{log['timestamp']}] {log['service']}: {log['message']}"
-            for log in result["logs"]
-        ])
+        logs_text = "\n".join(
+            [
+                f"[{log['timestamp']}] {log['service']}: {log['message']}"
+                for log in result["logs"]
+            ]
+        )
         summary = f"Logs Query: {query}\n"
         summary += f"Retrieved: {result['count']} logs (from {result['from_time']} to {result['to_time']})\n"
         summary += f"Has more data: {result.get('has_more', False)}\n\n"
@@ -1571,14 +1805,15 @@ def get_logs_resource(query: str) -> str:
     else:
         return f"Error searching logs: {result['error']}"
 
+
 @mcp.resource("datadog://logs-detailed/{query}")
 def get_detailed_logs_resource(query: str) -> str:
     """
     Get detailed logs data as a resource with full log information.
-    
+
     Args:
         query: Log search query
-    
+
     Returns:
         Detailed formatted logs data as string
     """
@@ -1594,11 +1829,11 @@ def get_detailed_logs_resource(query: str) -> str:
             log_detail += f"Source: {log['source']}\n"
             log_detail += f"Tags: {', '.join(log['tags'])}\n"
             log_detail += f"Message: {log['message']}\n"
-            if log.get('custom_attributes'):
+            if log.get("custom_attributes"):
                 log_detail += f"Custom Attributes: {log['custom_attributes']}\n"
             log_detail += "-" * 50
             logs_details.append(log_detail)
-        
+
         summary = f"Detailed Logs Query: {query}\n"
         summary += f"Retrieved: {result['count']} logs (from {result['from_time']} to {result['to_time']})\n"
         summary += f"Sort: {result['sort']}, Indexes: {result['indexes_searched']}\n"
@@ -1607,28 +1842,35 @@ def get_detailed_logs_resource(query: str) -> str:
     else:
         return f"Error searching detailed logs: {result['error']}"
 
+
 @mcp.resource("datadog://health-check/{service_name}")
 def health_check_resource(service_name: str) -> str:
     """
     Intelligent health summary for a service with AI insights and recommendations.
-    
+
     Args:
         service_name: Name of the service to analyze
-        
+
     Returns:
         Comprehensive health assessment with actionable insights
     """
     try:
         # Collect multiple data points for comprehensive analysis
-        metrics_result = datadog_server.query_metrics(f"avg:trace.http.request.duration{{service:{service_name}}}")
+        metrics_result = datadog_server.query_metrics(
+            f"avg:trace.http.request.duration{{service:{service_name}}}"
+        )
         logs_result = get_logs(f"service:{service_name} status:error", limit=20)
-        cpu_result = datadog_server.query_metrics(f"avg:system.cpu.user{{service:{service_name}}}")
-        memory_result = datadog_server.query_metrics(f"avg:system.mem.used{{service:{service_name}}}")
-        
+        cpu_result = datadog_server.query_metrics(
+            f"avg:system.cpu.user{{service:{service_name}}}"
+        )
+        memory_result = datadog_server.query_metrics(
+            f"avg:system.mem.used{{service:{service_name}}}"
+        )
+
         # Calculate health scores
         def calculate_health_score(metrics, logs, cpu, memory):
             score = 10  # Start with perfect score
-            
+
             # Penalize based on error rate
             if logs.get("status") == "success" and logs.get("count", 0) > 0:
                 error_count = logs.get("count", 0)
@@ -1638,20 +1880,22 @@ def health_check_resource(service_name: str) -> str:
                     score -= 2
                 elif error_count > 0:
                     score -= 1
-            
+
             # Penalize based on high resource usage
             if cpu.get("status") == "success":
                 # This is simplified - in reality you'd parse the metrics data
                 score -= 0  # Placeholder for CPU analysis
-                
+
             if memory.get("status") == "success":
-                # This is simplified - in reality you'd parse the metrics data  
+                # This is simplified - in reality you'd parse the metrics data
                 score -= 0  # Placeholder for memory analysis
-                
+
             return max(0, min(10, score))
-        
-        health_score = calculate_health_score(metrics_result, logs_result, cpu_result, memory_result)
-        
+
+        health_score = calculate_health_score(
+            metrics_result, logs_result, cpu_result, memory_result
+        )
+
         # Generate status and recommendations
         if health_score >= 8:
             status = "🟢 Healthy"
@@ -1665,17 +1909,21 @@ def health_check_resource(service_name: str) -> str:
         else:
             status = "🔴 Critical"
             priority = "CRITICAL"
-        
+
         # Generate recommendations based on findings
         recommendations = []
         if logs_result.get("count", 0) > 5:
-            recommendations.append("⚠️ High error rate detected - investigate error patterns")
+            recommendations.append(
+                "⚠️ High error rate detected - investigate error patterns"
+            )
         if logs_result.get("count", 0) > 0:
             recommendations.append("📋 Review recent error logs for patterns")
-        
+
         recommendations.append("📊 Monitor key metrics trends over next 24 hours")
-        recommendations.append("🔄 Consider setting up automated alerts if not already configured")
-        
+        recommendations.append(
+            "🔄 Consider setting up automated alerts if not already configured"
+        )
+
         # Build comprehensive report
         report = f"""## 🏥 Health Check: {service_name}
 
@@ -1707,7 +1955,7 @@ def health_check_resource(service_name: str) -> str:
 """
 
         return report
-        
+
     except Exception as e:
         return f"""## ❌ Health Check Failed: {service_name}
 
@@ -1722,18 +1970,19 @@ def health_check_resource(service_name: str) -> str:
 *Report generated at: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}*
 """
 
+
 @mcp.prompt("datadog-metrics-analysis")
 def datadog_metrics_analysis_prompt(
     metric_query: str,
-    time_range_hours: str = "24"  # Changed to str to handle MCP client parameter format
+    time_range_hours: str = "24",  # Changed to str to handle MCP client parameter format
 ) -> str:
     """
     Generate a prompt for analyzing Datadog metrics.
-    
+
     Args:
         metric_query: The metrics query to analyze
         time_range_hours: Time range in hours for the analysis (as string, will be converted)
-    
+
     Returns:
         Formatted prompt for metrics analysis
     """
@@ -1742,6 +1991,7 @@ def datadog_metrics_analysis_prompt(
         if isinstance(time_range_hours, str):
             # Try to parse JSON format from MCP client
             import json
+
             try:
                 parsed = json.loads(time_range_hours)
                 if isinstance(parsed, dict) and "value" in parsed:
@@ -1754,7 +2004,7 @@ def datadog_metrics_analysis_prompt(
             hours = int(time_range_hours)
     except (ValueError, TypeError):
         hours = 24  # Default fallback
-    
+
     return f"""
     Analyze the following Datadog metrics:
     
@@ -1770,20 +2020,19 @@ def datadog_metrics_analysis_prompt(
     Use the query_datadog_metrics tool to fetch the actual data for analysis.
     """
 
+
 @mcp.prompt("datadog-performance-diagnosis")
 def performance_diagnosis_prompt(
-    service_name: str,
-    symptoms: str = "slow response times",
-    severity: str = "medium"
+    service_name: str, symptoms: str = "slow response times", severity: str = "medium"
 ) -> str:
     """
     AI-guided performance troubleshooting for Datadog monitored services.
-    
+
     Args:
         service_name: Name of the service experiencing issues
         symptoms: Observed symptoms (e.g., "slow response times", "high error rate")
         severity: Issue severity (low, medium, high, critical)
-    
+
     Returns:
         Structured troubleshooting workflow for AI agents
     """
@@ -1839,27 +2088,28 @@ def performance_diagnosis_prompt(
 **Success Criteria**: Provide actionable next steps within 15 minutes of investigation start.
 """
 
-@mcp.prompt("datadog-incident-commander")  
+
+@mcp.prompt("datadog-incident-commander")
 def incident_commander_prompt(
     severity: str = "high",
     affected_services: str = "",
     symptoms: str = "",
-    estimated_user_impact: str = "unknown"
+    estimated_user_impact: str = "unknown",
 ) -> str:
     """
     AI-powered incident command and coordination workflow.
-    
+
     Args:
         severity: Incident severity (low, medium, high, critical)
         affected_services: Comma-separated list of affected services
         symptoms: Observed incident symptoms
         estimated_user_impact: Estimated percentage of users affected
-        
+
     Returns:
         Structured incident response protocol for AI agents
     """
     services_list = [s.strip() for s in affected_services.split(",") if s.strip()]
-    
+
     return f"""
 🚨 **INCIDENT COMMAND PROTOCOL**
 
@@ -1944,20 +2194,21 @@ def incident_commander_prompt(
 - Post-incident review: Within 48 hours
 """
 
+
 @mcp.prompt("datadog-time-range-advisor")
 def time_range_advisor_prompt(
     analysis_type: str = "performance",
-    suspected_timeframe: str = "unknown", 
-    incident_impact: str = "medium"
+    suspected_timeframe: str = "unknown",
+    incident_impact: str = "medium",
 ) -> str:
     """
     AI-powered time range selection advisor for optimal Datadog analysis.
-    
+
     Args:
         analysis_type: Type of analysis (performance, security, deployment, capacity, incident)
-        suspected_timeframe: When issue might have started (recent, hours, days, weeks, unknown)  
+        suspected_timeframe: When issue might have started (recent, hours, days, weeks, unknown)
         incident_impact: Impact level (low, medium, high, critical)
-        
+
     Returns:
         Intelligent time range recommendations with specific parameter suggestions
     """
@@ -2107,6 +2358,7 @@ Based on your **{analysis_type}** analysis with **{suspected_timeframe}** timefr
 **PERFORMANCE BALANCE**: Monitor query response times and adjust accordingly
 """
 
+
 # Note: Middleware integration varies by FastMCP version
 # For debugging, you can add logging directly within tool functions
 
@@ -2114,101 +2366,126 @@ if __name__ == "__main__":
     # Configure server to use HTTP transport with SSE support
     host = os.getenv("MCP_SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("MCP_SERVER_PORT", "8080"))
-    
+
     logger.info(f"Starting Datadog MCP Server on {host}:{port}")
     logger.info("Transport: HTTP Streamable with SSE support")
     logger.info(f"Datadog Site: {datadog_config.primary_site}")
-    
+
     # Add request logging middleware for debugging
     import json
     from typing import Any, Dict
-    
+
     # Store original tool functions for error handling - simplified to avoid deprecation warnings
     original_tools = {}
     tool_names = [
-        'get_metrics', 'list_metrics', 'get_logs', 'get_monitors', 
-        'list_dashboards', 'list_spans', 'get_trace', 'list_incidents',
-        'get_incident', 'list_hosts', 'get_host'
+        "get_metrics",
+        "list_metrics",
+        "get_logs",
+        "get_monitors",
+        "list_dashboards",
+        "list_spans",
+        "get_trace",
+        "list_incidents",
+        "get_incident",
+        "list_hosts",
+        "get_host",
     ]
     logger.info(f"Registered {len(tool_names)} tools for enhanced error handling")
-    
+
     # Enhanced error logging
     def log_request_error(tool_name: str, params: Dict[str, Any], error: Exception):
         logger.error(f"Tool '{tool_name}' error:")
         logger.error(f"  Parameters: {json.dumps(params, default=str, indent=2)}")
         logger.error(f"  Error: {str(error)}")
         logger.error(f"  Error type: {type(error).__name__}")
-    
+
     # Add HTTP middleware for debugging
     if debug_config.should_log_at_level(DebugLevel.DEBUG):
         logging.getLogger("uvicorn.error").setLevel(logging.DEBUG)
         logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
         logging.getLogger("fastmcp").setLevel(logging.DEBUG)
         logging.getLogger("httpx").setLevel(logging.DEBUG)
-        
+
     if debug_config.should_log_at_level(DebugLevel.TRACE):
         logging.getLogger("uvicorn").setLevel(logging.DEBUG)
         # Enable all HTTP debugging
         import httpx
         import logging
+
         logging.basicConfig(level=logging.DEBUG)
-    
+
     # Enhanced logging for MCP protocol errors
     def log_mcp_error(operation: str, error: Exception, context: dict = None):
         """Log MCP protocol errors with detailed context"""
-        debug_log(DebugLevel.ERROR, f"MCP {operation} Error", {
-            "operation": operation,
-            "error_type": type(error).__name__,
-            "error_message": str(error),
-            "context": context or {},
-            "traceback": traceback.format_exc()
-        })
-    
+        debug_log(
+            DebugLevel.ERROR,
+            f"MCP {operation} Error",
+            {
+                "operation": operation,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+                "context": context or {},
+                "traceback": traceback.format_exc(),
+            },
+        )
+
     # Override FastMCP error handling if possible
     try:
         # Try to access internal FastMCP components for enhanced error logging
-        if hasattr(mcp, '_server') and hasattr(mcp._server, 'error_handler'):
+        if hasattr(mcp, "_server") and hasattr(mcp._server, "error_handler"):
             original_error_handler = mcp._server.error_handler
-            
+
             def enhanced_error_handler(error: Exception):
                 log_mcp_error("Protocol", error, {"original_handler": "FastMCP"})
-                return original_error_handler(error) if original_error_handler else {"error": str(error)}
-            
+                return (
+                    original_error_handler(error)
+                    if original_error_handler
+                    else {"error": str(error)}
+                )
+
             mcp._server.error_handler = enhanced_error_handler
             logger.info("Enhanced FastMCP error handler installed")
         else:
-            logger.info("FastMCP error handler not accessible - using global error handling")
+            logger.info(
+                "FastMCP error handler not accessible - using global error handling"
+            )
     except Exception as e:
         logger.warning(f"Could not enhance FastMCP error handling: {e}")
-    
+
     # Log all incoming requests at the FastMCP level - removed invalid error_handler decorator
     def global_error_handler(error: Exception) -> dict:
         import traceback
-        debug_log(DebugLevel.INFO, f"GLOBAL ERROR HANDLER: {type(error).__name__}", {
-            "error": str(error),
-            "traceback": traceback.format_exc()
-        })
+
+        debug_log(
+            DebugLevel.INFO,
+            f"GLOBAL ERROR HANDLER: {type(error).__name__}",
+            {"error": str(error), "traceback": traceback.format_exc()},
+        )
         return {
             "error": str(error),
             "type": type(error).__name__,
-            "message": "An error occurred while processing your request"
+            "message": "An error occurred while processing your request",
         }
-        
+
     # Wrap tools with error handling (simplified approach)
     logger.info("Enhanced error handling enabled for debugging")
-    
+
     try:
         # Log debug configuration at startup
-        debug_log(DebugLevel.INFO, "MCP Server Starting with Debug Configuration", {
-            "debug_level": debug_config.level.value,
-            "log_requests": debug_config.log_requests,
-            "log_responses": debug_config.log_responses,
-            "log_timing": debug_config.log_timing,
-            "log_parameters": debug_config.log_parameters,
-            "pretty_print": debug_config.pretty_print,
-            "mask_sensitive_data": debug_config.mask_sensitive_data
-        })
-        
+        debug_log(
+            DebugLevel.INFO,
+            "MCP Server Starting with Debug Configuration",
+            {
+                "debug_level": debug_config.level.value,
+                "log_requests": debug_config.log_requests,
+                "log_responses": debug_config.log_responses,
+                "log_timing": debug_config.log_timing,
+                "log_parameters": debug_config.log_parameters,
+                "pretty_print": debug_config.pretty_print,
+                "mask_sensitive_data": debug_config.mask_sensitive_data,
+            },
+        )
+
         # Run the server with HTTP transport
         logger.info("Starting MCP server...")
         mcp.run(transport="http", host=host, port=port)
@@ -2216,4 +2493,3 @@ if __name__ == "__main__":
         logger.error(f"Failed to start server: {e}")
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
         exit(1)
-
