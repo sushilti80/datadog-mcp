@@ -29,14 +29,22 @@ def test_server_import():
 
 def test_datadog_config():
     """Test DatadogConfig creation"""
+    from key_rotation import KeyPair, KeyPoolManager
     from datadog_mcp_server import DatadogConfig
-    from key_rotation import KeyPoolManager
 
     key_pool = KeyPoolManager()
-    config = DatadogConfig(key_pool=key_pool, primary_site="us3.datadoghq.com")
+    key_pool.add_key(
+        KeyPair(
+            id="test",
+            api_key="test_api_key",
+            app_key="test_app_key",
+            site="datadoghq.com",
+        )
+    )
+    config = DatadogConfig(key_pool=key_pool, primary_site="datadoghq.com")
 
-    assert config.key_pool is key_pool
-    assert config.primary_site == "us3.datadoghq.com"
+    assert config.key_pool == key_pool
+    assert config.primary_site == "datadoghq.com"
 
 
 def test_server_tools_available():
